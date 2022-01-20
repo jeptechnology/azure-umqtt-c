@@ -142,12 +142,11 @@ static void frame_received(void* context, const unsigned char* type_specific, ui
     }
 }
 
-static int encode_bytes(void* context, const unsigned char* bytes, size_t length)
+static int encode_bytes(void* context, const PAYLOAD* bytes)
 {
-    PAYLOAD* payload = (PAYLOAD*)context;
-    (void)memcpy((unsigned char*)payload->bytes + payload->length, bytes, length);
-    payload->length += length;
-    return 0;
+   PAYLOAD* payload = (PAYLOAD*)context;
+   payload_append_payload_as_copy(payload, bytes);
+   return 0;
 }
 
 SASL_FRAME_CODEC_HANDLE sasl_frame_codec_create(FRAME_CODEC_HANDLE frame_codec, ON_SASL_FRAME_RECEIVED on_sasl_frame_received, ON_SASL_FRAME_CODEC_ERROR on_sasl_frame_codec_error, void* callback_context)
@@ -286,45 +285,33 @@ int sasl_frame_codec_encode_frame(SASL_FRAME_CODEC_HANDLE sasl_frame_codec, AMQP
         }
         else
         {
-            unsigned char* sasl_frame_bytes = (unsigned char*)malloc(encoded_size);
-            if (sasl_frame_bytes == NULL)
+            PAYLOAD *payload = payload_create();
+            payload_reserve_data(payload, encoded_size);
+
+            if (amqpvalue_encode(sasl_frame_value, encode_bytes, payload) != 0)
             {
-                LogError("Cannot allocate SASL frame bytes");
-                result = MU_FAILURE;
+               result = MU_FAILURE;
             }
             else
             {
-                PAYLOAD payload;
-
-                payload.bytes = sasl_frame_bytes;
-                payload.length = 0;
-
-                if (amqpvalue_encode(sasl_frame_value, encode_bytes, &payload) != 0)
-                {
-                    LogError("Cannot encode SASL frame value");
-                    result = MU_FAILURE;
-                }
-                else
-                {
-                    /* Codes_SRS_SASL_FRAME_CODEC_01_031: [sasl_frame_codec_encode_frame shall encode the frame header and its contents by using frame_codec_encode_frame.] */
-                    /* Codes_SRS_SASL_FRAME_CODEC_01_012: [Bytes 6 and 7 of the header are ignored.] */
-                    /* Codes_SRS_SASL_FRAME_CODEC_01_013: [Implementations SHOULD set these to 0x00.] */
-                    /* Codes_SRS_SASL_FRAME_CODEC_01_014: [The extended header is ignored.] */
-                    /* Codes_SRS_SASL_FRAME_CODEC_01_015: [Implementations SHOULD therefore set DOFF to 0x02.] */
-                    if (frame_codec_encode_frame(sasl_frame_codec_instance->frame_codec, FRAME_TYPE_SASL, &payload, 1, NULL, 0, on_bytes_encoded, callback_context) != 0)
-                    {
-                        /* Codes_SRS_SASL_FRAME_CODEC_01_034: [If any error occurs during encoding, sasl_frame_codec_encode_frame shall fail and return a non-zero value.] */
-                        LogError("Cannot encode SASL frame");
-                        result = MU_FAILURE;
-                    }
-                    else
-                    {
-                        result = 0;
-                    }
-                }
-
-                free(sasl_frame_bytes);
+               /* Codes_SRS_SASL_FRAME_CODEC_01_031: [sasl_frame_codec_encode_frame shall encode the frame header and its contents by using frame_codec_encode_frame.] */
+               /* Codes_SRS_SASL_FRAME_CODEC_01_012: [Bytes 6 and 7 of the header are ignored.] */
+               /* Codes_SRS_SASL_FRAME_CODEC_01_013: [Implementations SHOULD set these to 0x00.] */
+               /* Codes_SRS_SASL_FRAME_CODEC_01_014: [The extended header is ignored.] */
+               /* Codes_SRS_SASL_FRAME_CODEC_01_015: [Implementations SHOULD therefore set DOFF to 0x02.] */
+               if (frame_codec_encode_frame(sasl_frame_codec_instance->frame_codec, FRAME_TYPE_SASL, payload, NULL, 0, on_bytes_encoded, callback_context) != 0)
+               {
+                  /* Codes_SRS_SASL_FRAME_CODEC_01_034: [If any error occurs during encoding, sasl_frame_codec_encode_frame shall fail and return a non-zero value.] */
+                  LogError("Cannot encode SASL frame");
+                  result = MU_FAILURE;
+               }
+               else
+               {
+                  result = 0;
+               }
             }
+
+            payload_destroy(&payload);
         }
     }
 

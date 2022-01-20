@@ -129,11 +129,10 @@ static void frame_received(void* context, const unsigned char* type_specific, ui
     }
 }
 
-static int encode_bytes(void* context, const unsigned char* bytes, size_t length)
+static int encode_bytes(void* context, const PAYLOAD* to_append)
 {
     PAYLOAD* payload = (PAYLOAD*)context;
-    (void)memcpy((unsigned char*)payload->bytes + payload->length, bytes, length);
-    payload->length += length;
+    payload_append_payload_as_copy(payload, to_append);
     return 0;
 }
 
@@ -217,7 +216,7 @@ void amqp_frame_codec_destroy(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec)
     }
 }
 
-int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint16_t channel, AMQP_VALUE performative, const PAYLOAD* payloads, size_t payload_count, ON_BYTES_ENCODED on_bytes_encoded, void* callback_context)
+int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint16_t channel, AMQP_VALUE performative, PAYLOAD* payloads, ON_BYTES_ENCODED on_bytes_encoded, void* callback_context)
 {
     int result;
 
@@ -266,15 +265,7 @@ int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint
         }
         else
         {
-            unsigned char* amqp_performative_bytes = (unsigned char*)malloc(encoded_size);
-            if (amqp_performative_bytes == NULL)
-            {
-                LogError("Could not allocate performative bytes");
-                result = MU_FAILURE;
-            }
-            else
-            {
-                PAYLOAD* new_payloads = (PAYLOAD*)calloc(1, (sizeof(PAYLOAD) * (payload_count + 1)));
+                PAYLOAD* new_payloads = payload_create();
                 if (new_payloads == NULL)
                 {
                     LogError("Could not allocate frame payloads");
@@ -284,15 +275,9 @@ int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint
                 {
                     /* Codes_SRS_AMQP_FRAME_CODEC_01_070: [The payloads argument for frame_codec_encode_frame shall be made of the payload for the encoded performative and the payloads passed to amqp_frame_codec_encode_frame.] */
                     /* Codes_SRS_AMQP_FRAME_CODEC_01_028: [The encode result for the performative shall be placed in a PAYLOAD structure.] */
-                    new_payloads[0].bytes = amqp_performative_bytes;
-                    new_payloads[0].length = 0;
+                    payload_reserve_data(new_payloads, encoded_size);
 
-                    if (payload_count > 0)
-                    {
-                        (void)memcpy(new_payloads + 1, payloads, sizeof(PAYLOAD) * payload_count);
-                    }
-
-                    if (amqpvalue_encode(performative, encode_bytes, &new_payloads[0]) != 0)
+                    if (amqpvalue_encode(performative, encode_bytes, new_payloads) != 0)
                     {
                         LogError("amqpvalue_encode failed");
                         result = MU_FAILURE;
@@ -304,10 +289,13 @@ int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint
                         channel_bytes[0] = channel >> 8;
                         channel_bytes[1] = channel & 0xFF;
 
+                        /* Codes_SRS_AMQP_FRAME_CODEC_01_070: [The payloads argument for frame_codec_encode_frame shall be made of the payload for the encoded performative and the payloads passed to amqp_frame_codec_encode_frame.] */
+                        payload_append_payload_as_copy(new_payloads, payloads);
+
                         /* Codes_SRS_AMQP_FRAME_CODEC_01_005: [Bytes 6 and 7 of an AMQP frame contain the channel number ] */
                         /* Codes_SRS_AMQP_FRAME_CODEC_01_025: [amqp_frame_codec_encode_frame shall encode the frame header by using frame_codec_encode_frame.] */
                         /* Codes_SRS_AMQP_FRAME_CODEC_01_006: [The frame body is defined as a performative followed by an opaque payload.] */
-                        if (frame_codec_encode_frame(amqp_frame_codec->frame_codec, FRAME_TYPE_AMQP, new_payloads, payload_count + 1, channel_bytes, sizeof(channel_bytes), on_bytes_encoded, callback_context) != 0)
+                        if (frame_codec_encode_frame(amqp_frame_codec->frame_codec, FRAME_TYPE_AMQP, new_payloads, channel_bytes, sizeof(channel_bytes), on_bytes_encoded, callback_context) != 0)
                         {
                             /* Codes_SRS_AMQP_FRAME_CODEC_01_029: [If any error occurs during encoding, amqp_frame_codec_encode_frame shall fail and return a non-zero value.] */
                             LogError("frame_codec_encode_frame failed");
@@ -320,11 +308,9 @@ int amqp_frame_codec_encode_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec, uint
                         }
                     }
 
-                    free(new_payloads);
                 }
 
-                free(amqp_performative_bytes);
-            }
+                payload_destroy(&new_payloads);
         }
     }
 
@@ -351,7 +337,7 @@ int amqp_frame_codec_encode_empty_frame(AMQP_FRAME_CODEC_HANDLE amqp_frame_codec
         channel_bytes[1] = channel & 0xFF;
 
         /* Codes_SRS_AMQP_FRAME_CODEC_01_044: [amqp_frame_codec_encode_empty_frame shall use frame_codec_encode_frame to encode the frame.] */
-        if (frame_codec_encode_frame(amqp_frame_codec->frame_codec, FRAME_TYPE_AMQP, NULL, 0, channel_bytes, sizeof(channel_bytes), on_bytes_encoded, callback_context) != 0)
+        if (frame_codec_encode_frame(amqp_frame_codec->frame_codec, FRAME_TYPE_AMQP, NULL, channel_bytes, sizeof(channel_bytes), on_bytes_encoded, callback_context) != 0)
         {
             /* Codes_SRS_AMQP_FRAME_CODEC_01_046: [If encoding fails in any way, amqp_frame_codec_encode_empty_frame shall fail and return a non-zero value.]  */
             LogError("frame_codec_encode_frame failed when encoding empty frame");

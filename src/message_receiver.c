@@ -189,32 +189,22 @@ static void decode_message_value_callback(void* context, AMQP_VALUE decoded_valu
             }
             else
             {
-                AMQP_VALUE body_data_value = amqpvalue_get_inplace_described_value(decoded_value);
-                if (body_data_value == NULL)
-                {
-                    LogError("Error getting body DATA value");
-                    message_receiver->decode_error = true;
-                }
-                else
-                {
-                    data data_value;
-                    if (amqpvalue_get_data(body_data_value, &data_value) != 0)
-                    {
-                        LogError("Error getting body DATA AMQP value");
-                        message_receiver->decode_error = true;
-                    }
-                    else
-                    {
-                        BINARY_DATA binary_data;
-                        binary_data.bytes = (const unsigned char*)data_value.bytes;
-                        binary_data.length = data_value.length;
-                        if (message_add_body_amqp_data(decoded_message, binary_data) != 0)
-                        {
-                            LogError("Error adding body DATA to received message");
-                            message_receiver->decode_error = true;
-                        }
-                    }
-                }
+               AMQP_VALUE body_data_value = amqpvalue_get_inplace_described_value(decoded_value);
+               data data_value = payload_create();
+               if ((body_data_value == NULL) ||
+                  (amqpvalue_get_data(body_data_value, data_value) != 0))
+               {
+                  message_receiver->decode_error = true;
+               }
+               else
+               {
+                  if (message_add_body_amqp_data(decoded_message, data_value) != 0)
+                  {
+                     message_receiver->decode_error = true;
+                  }
+               }
+
+               payload_destroy(&data_value);
             }
         }
     }

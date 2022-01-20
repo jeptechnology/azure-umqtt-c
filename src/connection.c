@@ -258,24 +258,191 @@ static void log_outgoing_frame(AMQP_VALUE performative)
 #endif
 }
 
-static void on_bytes_encoded(void* context, const unsigned char* bytes, size_t length, bool encode_complete)
+/*********************************************************************************************************************
+ * Schneider Electric Funky Streaming Changes
+ * 
+ * The following code allows us to stream data through an AMQP connection via AMQP "PAYLOAD" structures that have 
+ * calllback functions (with context data) as well as raw byte data.
+ * 
+ *********************************************************************************************************************/ 
+
+typedef struct
 {
-    CONNECTION_HANDLE connection = (CONNECTION_HANDLE)context;
-    if (xio_send(connection->io, bytes, length,
-        (encode_complete && connection->on_send_complete != NULL) ? connection->on_send_complete : unchecked_on_send_complete,
-        connection->on_send_complete_callback_context) != 0)
-    {
-        LogError("Cannot send encoded bytes");
+   CONNECTION_HANDLE connection;
+   struct
+   {
+      unsigned char *data;
+      size_t         size;
+      size_t         capacity;
+   } buffer;
+   size_t number_of_bytes_expected;
+   bool error_free;
+} StreamingContext;
 
-        if (xio_close(connection->io, NULL, NULL) != 0)
-        {
-            LogError("xio_close failed");
-        }
+// [JEP] use this low level debug for getting insight into the AMQP byte data
+// #define AMQP_LOW_LEVEL_DEBUG
+#if defined(AMQP_LOW_LEVEL_DEBUG)
+#define LINE_SIZE 16
+static unsigned line_position = 0;
+static char line[LINE_SIZE + 1] = { 0 };
 
-        connection_set_state(connection, CONNECTION_STATE_END);
-    }
+void DebugCompleteLine()
+{
+   line[line_position] = '\0';
+
+   while (line_position < LINE_SIZE)
+   {
+      printf("   ");
+      line_position++;
+   }
+
+   printf(" %s\n", line);
+   line_position = 0;
 }
 
+void DebugOutput(const u8 * buffer, size_t size)
+{
+   const char *charBuffer = (const char *)(buffer);
+   while (size-- > 0)
+   {
+      if (isprint(*charBuffer))
+      {
+         line[line_position] = *charBuffer;
+      }
+      else
+      {
+         line[line_position] = '.';
+      }
+      printf(" %02x", *charBuffer);
+      charBuffer++;
+      line_position++;
+      if (line_position == LINE_SIZE)
+      {
+         DebugCompleteLine();
+      }
+   }
+}
+#else
+void DebugCompleteLine() {}
+void DebugOutput(const uint8_t* buffer, size_t length) 
+{
+   (void)buffer; (void)length;
+}
+#endif
+
+static bool connection_stream_flush_buffer(StreamingContext *context)
+{
+   CONNECTION_HANDLE connection = context->connection;
+   DebugOutput(context->buffer.data, context->buffer.size);
+   return xio_send(connection->io, context->buffer.data, context->buffer.size, NULL, NULL) == 0;
+}
+
+static bool connection_stream_payload(void *generic_context, const unsigned char *buffer, size_t length)
+{
+   size_t bytes_written = 0;
+   StreamingContext *context = (StreamingContext*)generic_context;
+
+   if (context->number_of_bytes_expected < length)
+   {
+      //DPRINTF_ALWAYS("[amqp] WARNING: message callback has outgrown its original length calculation");
+      context->error_free = false;
+      context->number_of_bytes_expected = 0; // no more bytes allowed due to error
+   }
+   else
+   {
+      // by the end of this call we should expect "length" less bytes to come
+      context->number_of_bytes_expected -= length;
+   }
+
+   size_t spare_capacity = context->buffer.capacity - context->buffer.size;
+
+   // keep filling the buffer and writing the data 
+   while (context->error_free && length > spare_capacity)
+   {
+      memcpy(&context->buffer.data[context->buffer.size], buffer, spare_capacity);
+      context->buffer.size += spare_capacity;
+      bytes_written += spare_capacity;
+
+      if (connection_stream_flush_buffer(context))
+      {
+         length -= spare_capacity;
+         buffer += spare_capacity;
+         context->buffer.size = 0;
+         spare_capacity = context->buffer.capacity;
+      }
+      else
+      {
+         context->error_free = false;
+      }
+   }
+
+   if (context->error_free)
+   {
+      // finally copy the last remnant onto the buffer
+      memcpy(&context->buffer.data[context->buffer.size], buffer, length);
+      context->buffer.size += length;
+      bytes_written += length;
+   }
+
+   return context->error_free;
+}
+
+static const size_t BUFFER_SIZE = 1024;
+
+static void on_bytes_encoded(void* context, PAYLOAD *payload, bool encode_complete)
+{
+   CONNECTION_HANDLE connection = (CONNECTION_HANDLE)context;
+   
+   unsigned char *buffer = (unsigned char *)malloc(BUFFER_SIZE);
+   StreamingContext streaming_context =
+   {
+      .connection = connection,
+      .buffer = {
+         .data = buffer,
+         .size = 0,
+         .capacity = BUFFER_SIZE
+      },
+      .number_of_bytes_expected = payload_get_length(payload),
+      .error_free = true
+   };
+
+   // stream all payload output to the socket
+   bool success = payload_stream_output(payload, connection_stream_payload, &streaming_context);
+   if (success)
+   {
+      // If the length has shrunk since we calculated it (deleted domain?) 
+      // we should pad to honour our length field
+      if (streaming_context.number_of_bytes_expected > 0)
+      {
+         //DPRINTF_ALWAYS("[amqp] WARNING: Underflow of payload by %d bytes - we are padding with spaces", streaming_context.number_of_bytes_expected);
+         while (streaming_context.number_of_bytes_expected > 0)
+         {
+            unsigned char spaceToPad = (unsigned char)' ';
+            success = connection_stream_payload(&streaming_context, &spaceToPad, 1);
+         }
+      }
+      success = connection_stream_flush_buffer(&streaming_context);
+   }
+   DebugCompleteLine();
+
+   free(buffer);
+
+   // was this the end of the data? if so do it one last time
+   if (encode_complete)
+   {
+      if (connection->on_send_complete)
+      {
+         connection->on_send_complete(connection->on_send_complete_callback_context, success ? IO_SEND_OK : IO_SEND_ERROR);
+      }
+   }
+
+   // any issues? 
+   if (!success)
+   {
+      xio_close(connection->io, NULL, NULL);
+      connection_set_state(connection, CONNECTION_STATE_END);
+   }
+}
 static int send_open_frame(CONNECTION_HANDLE connection)
 {
     int result;
@@ -412,7 +579,7 @@ static int send_open_frame(CONNECTION_HANDLE connection)
                     /* Codes_S_R_S_CONNECTION_01_006: [The open frame can only be sent on channel 0.] */
                     connection->on_send_complete = NULL;
                     connection->on_send_complete_callback_context = NULL;
-                    if (amqp_frame_codec_encode_frame(connection->amqp_frame_codec, 0, open_performative_value, NULL, 0, on_bytes_encoded, connection) != 0)
+                    if (amqp_frame_codec_encode_frame(connection->amqp_frame_codec, 0, open_performative_value, NULL, on_bytes_encoded, connection) != 0)
                     {
                         LogError("amqp_frame_codec_encode_frame failed");
 
@@ -483,7 +650,7 @@ static int send_close_frame(CONNECTION_HANDLE connection, ERROR_HANDLE error_han
                 /* Codes_S_R_S_CONNECTION_01_013: [However, implementations SHOULD send it on channel 0] */
                 connection->on_send_complete = NULL;
                 connection->on_send_complete_callback_context = NULL;
-                if (amqp_frame_codec_encode_frame(connection->amqp_frame_codec, 0, close_performative_value, NULL, 0, on_bytes_encoded, connection) != 0)
+                if (amqp_frame_codec_encode_frame(connection->amqp_frame_codec, 0, close_performative_value, NULL, on_bytes_encoded, connection) != 0)
                 {
                     LogError("amqp_frame_codec_encode_frame failed");
                     result = MU_FAILURE;
@@ -2025,7 +2192,7 @@ void connection_destroy_endpoint(ENDPOINT_HANDLE endpoint)
 }
 
 /* Codes_S_R_S_CONNECTION_01_247: [connection_encode_frame shall send a frame for a certain endpoint.] */
-int connection_encode_frame(ENDPOINT_HANDLE endpoint, AMQP_VALUE performative, PAYLOAD* payloads, size_t payload_count, ON_SEND_COMPLETE on_send_complete, void* callback_context)
+int connection_encode_frame(ENDPOINT_HANDLE endpoint, AMQP_VALUE performative, PAYLOAD* payloads, ON_SEND_COMPLETE on_send_complete, void* callback_context)
 {
     int result;
 
@@ -2056,7 +2223,7 @@ int connection_encode_frame(ENDPOINT_HANDLE endpoint, AMQP_VALUE performative, P
             /* Codes_S_R_S_CONNECTION_01_252: [The performative passed to amqp_frame_codec_begin_encode_frame shall be the performative argument of connection_encode_frame.] */
             connection->on_send_complete = on_send_complete;
             connection->on_send_complete_callback_context = callback_context;
-            if (amqp_frame_codec_encode_frame(amqp_frame_codec, endpoint->outgoing_channel, performative, payloads, payload_count, on_bytes_encoded, connection) != 0)
+            if (amqp_frame_codec_encode_frame(amqp_frame_codec, endpoint->outgoing_channel, performative, payloads, on_bytes_encoded, connection) != 0)
             {
                 /* Codes_S_R_S_CONNECTION_01_253: [If amqp_frame_codec_begin_encode_frame or amqp_frame_codec_encode_payload_bytes fails, then connection_encode_frame shall fail and return a non-zero value.] */
                 LogError("Encoding AMQP frame failed");

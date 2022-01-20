@@ -32,7 +32,7 @@ extern "C" {
 
     MOCKABLE_FUNCTION(, int, properties_get_message_id, PROPERTIES_HANDLE, properties, AMQP_VALUE*, message_id_value);
     MOCKABLE_FUNCTION(, int, properties_set_message_id, PROPERTIES_HANDLE, properties, AMQP_VALUE, message_id_value);
-    MOCKABLE_FUNCTION(, int, properties_get_user_id, PROPERTIES_HANDLE, properties, amqp_binary*, user_id_value);
+    MOCKABLE_FUNCTION(, int, properties_get_user_id, PROPERTIES_HANDLE, properties, amqp_binary, user_id_value);
     MOCKABLE_FUNCTION(, int, properties_set_user_id, PROPERTIES_HANDLE, properties, amqp_binary, user_id_value);
     MOCKABLE_FUNCTION(, int, properties_get_to, PROPERTIES_HANDLE, properties, AMQP_VALUE*, to_value);
     MOCKABLE_FUNCTION(, int, properties_set_to, PROPERTIES_HANDLE, properties, AMQP_VALUE, to_value);

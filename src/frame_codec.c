@@ -576,7 +576,7 @@ int frame_codec_unsubscribe(FRAME_CODEC_HANDLE frame_codec, uint8_t type)
     return result;
 }
 
-int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const PAYLOAD* payloads, size_t payload_count, const unsigned char* type_specific_bytes, uint32_t type_specific_size, ON_BYTES_ENCODED on_bytes_encoded, void* callback_context)
+int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, PAYLOAD* payloads, const unsigned char* type_specific_bytes, uint32_t type_specific_size, ON_BYTES_ENCODED on_bytes_encoded, void* callback_context)
 {
     int result;
 
@@ -594,7 +594,7 @@ int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const
             frame_codec, on_bytes_encoded, (unsigned int)type_specific_size, type_specific_bytes);
         result = MU_FAILURE;
     }
-    else if ((payloads == NULL) && (payload_count > 0))
+    else if (!payload_is_valid(payloads))
     {
         /* Codes_SRS_FRAME_CODEC_01_107: [If the argument `payloads` is NULL and `payload_count` is non-zero, `frame_codec_encode_frame` shall return a non-zero value.]*/
         LogError("NULL payloads argument with non-zero payload count");
@@ -608,31 +608,13 @@ int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const
         uint8_t padding_byte_count;
         uint32_t frame_body_offset = type_specific_size + 6;
         uint8_t doff = (uint8_t)((frame_body_offset + 3) / 4);
-        size_t i;
         size_t frame_size;
         size_t frame_body_size = 0;
         frame_body_offset = doff * 4;
         padding_byte_count = (uint8_t)(frame_body_offset - type_specific_size - 6);
 
-        for (i = 0; i < payload_count; i++)
-        {
-            /* Codes_SRS_FRAME_CODEC_01_110: [ If the `bytes` member of a payload entry is NULL, `frame_codec_encode_frame` shall fail and return a non-zero value. ] */
-            if ((payloads[i].bytes == NULL) ||
-                /* Codes_SRS_FRAME_CODEC_01_111: [ If the `length` member of a payload entry is 0, `frame_codec_encode_frame` shall fail and return a non-zero value. ] */
-                (payloads[i].length == 0))
-            {
-                break;
-            }
+        frame_body_size = payload_get_length(payloads);
 
-            frame_body_size += payloads[i].length;
-        }
-
-        if (i < payload_count)
-        {
-            LogError("Bad payload entry");
-            result = MU_FAILURE;
-        }
-        else
         {
             /* Codes_SRS_FRAME_CODEC_01_063: [This is an unsigned 32-bit integer that MUST contain the total frame size of the frame header, extended header, and frame body.] */
             frame_size = frame_body_size + frame_body_offset;
@@ -646,8 +628,8 @@ int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const
             else
             {
                 /* Codes_SRS_FRAME_CODEC_01_108: [ Memory shall be allocated to hold the entire frame. ]*/
-                unsigned char* encoded_frame = (unsigned char*)malloc(frame_size);
-                if (encoded_frame == NULL)
+                PAYLOAD* encoded_frame_payload = payload_create();
+                if (encoded_frame_payload == NULL)
                 {
                     /* Codes_SRS_FRAME_CODEC_01_109: [ If allocating memory fails, `frame_codec_encode_frame` shall fail and return a non-zero value. ]*/
                     LogError("Cannot allocate memory for frame");
@@ -666,7 +648,6 @@ int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const
                     /* Codes_SRS_FRAME_CODEC_01_063: [This is an unsigned 32-bit integer that MUST contain the total frame size of the frame header, extended header, and frame body.] */
                     /* Codes_SRS_FRAME_CODEC_01_064: [The frame is malformed if the size is less than the size of the frame header (8 bytes).] */
                     unsigned char frame_header[6];
-                    size_t current_pos = 0;
                     /* Codes_SRS_FRAME_CODEC_01_090: [If the type_specific_size - 2 does not divide by 4, frame_codec_encode_frame shall pad the type_specific bytes with zeroes so that type specific data is according to the AMQP ISO.] */
                     unsigned char padding_bytes[] = { 0x00, 0x00, 0x00 };
 
@@ -679,33 +660,26 @@ int frame_codec_encode_frame(FRAME_CODEC_HANDLE frame_codec, uint8_t type, const
                     /* Codes_SRS_FRAME_CODEC_01_069: [TYPE Byte 5 of the frame header is a type code.] */
                     frame_header[5] = type;
 
-                    (void)memcpy(encoded_frame, frame_header, sizeof(frame_header));
-                    current_pos += sizeof(frame_header);
+                    payload_reserve_data(encoded_frame_payload, frame_body_offset);
+                    payload_append_data(encoded_frame_payload, frame_header, sizeof(frame_header));
 
                     if (type_specific_size > 0)
                     {
-                        (void)memcpy(encoded_frame + current_pos, type_specific_bytes, type_specific_size);
-                        current_pos += type_specific_size;
+                       payload_append_data(encoded_frame_payload, type_specific_bytes, type_specific_size);
                     }
 
-                    /* send padding bytes */
                     if (padding_byte_count > 0)
                     {
-                        (void)memcpy(encoded_frame + current_pos, padding_bytes, padding_byte_count);
-                        current_pos += padding_byte_count;
+                       payload_append_data(encoded_frame_payload, padding_bytes, padding_byte_count);
                     }
 
                     /* Codes_SRS_FRAME_CODEC_01_106: [All payloads shall be encoded in order as part of the frame.] */
-                    for (i = 0; i < payload_count; i++)
-                    {
-                        (void)memcpy(encoded_frame + current_pos, payloads[i].bytes, payloads[i].length);
-                        current_pos += payloads[i].length;
-                    }
+                    payload_append_payload_as_copy(encoded_frame_payload, payloads);
 
                     /* Codes_SRS_FRAME_CODEC_01_088: [Encoded bytes shall be passed to the `on_bytes_encoded` callback in a single call, while setting the `encode complete` argument to true.] */
-                    on_bytes_encoded(callback_context, encoded_frame, frame_size, true);
+                    on_bytes_encoded(callback_context, encoded_frame_payload, true);
 
-                    free(encoded_frame);
+                    payload_destroy(&encoded_frame_payload);
 
                     /* Codes_SRS_FRAME_CODEC_01_043: [On success it shall return 0.] */
                     result = 0;

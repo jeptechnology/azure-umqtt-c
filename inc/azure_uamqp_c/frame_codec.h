@@ -5,6 +5,7 @@
 #define FRAME_CODEC_H
 
 #include "azure_uamqp_c/amqpvalue.h"
+#include "azure_uamqp_c/payload.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,12 +18,6 @@ extern "C" {
 #endif /* __cplusplus */
 
 #include "umock_c/umock_c_prod.h"
-
-typedef struct PAYLOAD_TAG
-{
-    const unsigned char* bytes;
-    size_t length;
-} PAYLOAD;
 
 /* Codes_SRS_FRAME_CODEC_01_016: [The type code indicates the format and purpose of the frame.] */
 /* Codes_SRS_FRAME_CODEC_01_017: [The subsequent bytes in the frame header MAY be interpreted differently depending on the type of the frame.] */
@@ -39,15 +34,15 @@ typedef struct PAYLOAD_TAG
     typedef struct FRAME_CODEC_INSTANCE_TAG* FRAME_CODEC_HANDLE;
     typedef void(*ON_FRAME_RECEIVED)(void* context, const unsigned char* type_specific, uint32_t type_specific_size, const unsigned char* frame_body, uint32_t frame_body_size);
     typedef void(*ON_FRAME_CODEC_ERROR)(void* context);
-    typedef void(*ON_BYTES_ENCODED)(void* context, const unsigned char* bytes, size_t length, bool encode_complete);
+	typedef void(*ON_BYTES_ENCODED)(void* context, PAYLOAD *payload, bool encode_complete);
 
     MOCKABLE_FUNCTION(, FRAME_CODEC_HANDLE, frame_codec_create, ON_FRAME_CODEC_ERROR, on_frame_codec_error, void*, callback_context);
     MOCKABLE_FUNCTION(, void, frame_codec_destroy, FRAME_CODEC_HANDLE, frame_codec);
     MOCKABLE_FUNCTION(, int, frame_codec_set_max_frame_size, FRAME_CODEC_HANDLE, frame_codec, uint32_t, max_frame_size);
     MOCKABLE_FUNCTION(, int, frame_codec_subscribe, FRAME_CODEC_HANDLE, frame_codec, uint8_t, type, ON_FRAME_RECEIVED, on_frame_received, void*, callback_context);
     MOCKABLE_FUNCTION(, int, frame_codec_unsubscribe, FRAME_CODEC_HANDLE, frame_codec, uint8_t, type);
-    MOCKABLE_FUNCTION(, int, frame_codec_receive_bytes, FRAME_CODEC_HANDLE, frame_codec, const unsigned char*, buffer, size_t, size);
-    MOCKABLE_FUNCTION(, int, frame_codec_encode_frame, FRAME_CODEC_HANDLE, frame_codec, uint8_t, type, const PAYLOAD*, payloads, size_t, payload_count, const unsigned char*, type_specific_bytes, uint32_t, type_specific_size, ON_BYTES_ENCODED, on_bytes_encoded, void*, callback_context);
+    MOCKABLE_FUNCTION(, int, frame_codec_receive_bytes, FRAME_CODEC_HANDLE, frame_codec, const unsigned char*, buffer, size_t, size); 
+    MOCKABLE_FUNCTION(, int, frame_codec_encode_frame, FRAME_CODEC_HANDLE, frame_codec, uint8_t, type, PAYLOAD*, payloads, const unsigned char*, type_specific_bytes, uint32_t, type_specific_size, ON_BYTES_ENCODED, on_bytes_encoded, void*, callback_context);
 
 #ifdef __cplusplus
 }

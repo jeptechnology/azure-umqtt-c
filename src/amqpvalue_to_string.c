@@ -363,44 +363,11 @@ char* amqpvalue_to_string(AMQP_VALUE amqp_value)
 
         case AMQP_TYPE_BINARY:
         {
-            amqp_binary binary_value;
-            if (amqpvalue_get_binary(amqp_value, &binary_value) != 0)
-            {
-                LogError("Failure getting binary value");
-                free(result);
-                result = NULL;
-            }
-            else
-            {
-                if (string_concat(&result, "<") != 0)
-                {
-                    LogError("Failure building amqp value string");
-                    free(result);
-                    result = NULL;
-                }
-                else
-                {
-                    uint64_t i;
-
-                    for (i = 0; i < binary_value.length; i++)
-                    {
-                        char str_value[4];
-                        if ((snprintf(str_value, sizeof(str_value), "%s%02X", (i > 0) ? " " : "", ((unsigned char*)binary_value.bytes)[i]) < 0) ||
-                            (string_concat(&result, str_value) != 0))
-                        {
-                            break;
-                        }
-                    }
-
-                    if ((i < binary_value.length) ||
-                        (string_concat(&result, ">") != 0))
-                    {
-                        LogError("Failure building amqp value string");
-                        free(result);
-                        result = NULL;
-                    }
-                }
-            }
+				if (string_concat(&result, "< binary payload that may include callbacks >") != 0)
+				{
+               free(result);
+					result = NULL;
+				}
             break;
         }
         case AMQP_TYPE_STRING:

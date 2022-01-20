@@ -7060,14 +7060,16 @@ int amqpvalue_get_transfer(AMQP_VALUE value, TRANSFER_HANDLE* transfer_handle)
                             }
                             else
                             {
-                                delivery_tag delivery_tag;
-                                if (amqpvalue_get_delivery_tag(item_value, &delivery_tag) != 0)
+                                delivery_tag delivery_tag = payload_create();
+                                if (amqpvalue_get_delivery_tag(item_value, delivery_tag) != 0)
                                 {
+                                    payload_destroy(&delivery_tag);
                                     amqpvalue_destroy(item_value);
                                     transfer_destroy(*transfer_handle);
                                     result = MU_FAILURE;
                                     break;
                                 }
+                                payload_destroy(&delivery_tag);
                             }
 
                             amqpvalue_destroy(item_value);
@@ -7467,7 +7469,7 @@ int transfer_set_delivery_id(TRANSFER_HANDLE transfer, delivery_number delivery_
     return result;
 }
 
-int transfer_get_delivery_tag(TRANSFER_HANDLE transfer, delivery_tag* delivery_tag_value)
+int transfer_get_delivery_tag(TRANSFER_HANDLE transfer, delivery_tag delivery_tag_value)
 {
     int result;
 
@@ -10703,16 +10705,17 @@ int amqpvalue_get_sasl_init(AMQP_VALUE value, SASL_INIT_HANDLE* sasl_init_handle
                             }
                             else
                             {
-                                amqp_binary initial_response;
-                                if (amqpvalue_get_binary(item_value, &initial_response) != 0)
+                                amqp_binary initial_response = payload_create();
+                                if (amqpvalue_get_binary(item_value, initial_response) != 0)
                                 {
                                     amqpvalue_destroy(item_value);
                                     sasl_init_destroy(*sasl_init_handle);
                                     result = MU_FAILURE;
+                                    payload_destroy(&initial_response);
                                     break;
                                 }
+                                payload_destroy(&initial_response);
                             }
-
                             amqpvalue_destroy(item_value);
                         }
                     }
@@ -10840,7 +10843,7 @@ int sasl_init_set_mechanism(SASL_INIT_HANDLE sasl_init, const char* mechanism_va
     return result;
 }
 
-int sasl_init_get_initial_response(SASL_INIT_HANDLE sasl_init, amqp_binary* initial_response_value)
+int sasl_init_get_initial_response(SASL_INIT_HANDLE sasl_init, amqp_binary initial_response_value)
 {
     int result;
 
@@ -11174,14 +11177,16 @@ int amqpvalue_get_sasl_challenge(AMQP_VALUE value, SASL_CHALLENGE_HANDLE* sasl_c
                             }
                             else
                             {
-                                amqp_binary challenge;
-                                if (amqpvalue_get_binary(item_value, &challenge) != 0)
+                                amqp_binary challenge  = payload_create();
+                                if (amqpvalue_get_binary(item_value, challenge) != 0)
                                 {
                                     amqpvalue_destroy(item_value);
                                     sasl_challenge_destroy(*sasl_challenge_handle);
                                     result = MU_FAILURE;
+                                    payload_destroy(&challenge);
                                     break;
                                 }
+                                payload_destroy(&challenge);
                             }
 
                             amqpvalue_destroy(item_value);
@@ -11204,7 +11209,7 @@ int amqpvalue_get_sasl_challenge(AMQP_VALUE value, SASL_CHALLENGE_HANDLE* sasl_c
     return result;
 }
 
-int sasl_challenge_get_challenge(SASL_CHALLENGE_HANDLE sasl_challenge, amqp_binary* challenge_value)
+int sasl_challenge_get_challenge(SASL_CHALLENGE_HANDLE sasl_challenge, amqp_binary challenge_value)
 {
     int result;
 
@@ -11455,14 +11460,16 @@ int amqpvalue_get_sasl_response(AMQP_VALUE value, SASL_RESPONSE_HANDLE* sasl_res
                             }
                             else
                             {
-                                amqp_binary response;
-                                if (amqpvalue_get_binary(item_value, &response) != 0)
+                                amqp_binary response = payload_create();
+                                if (amqpvalue_get_binary(item_value, response) != 0)
                                 {
                                     amqpvalue_destroy(item_value);
                                     sasl_response_destroy(*sasl_response_handle);
                                     result = MU_FAILURE;
+                                    payload_destroy(&response);
                                     break;
                                 }
+                                payload_destroy(&response);
                             }
 
                             amqpvalue_destroy(item_value);
@@ -11485,7 +11492,7 @@ int amqpvalue_get_sasl_response(AMQP_VALUE value, SASL_RESPONSE_HANDLE* sasl_res
     return result;
 }
 
-int sasl_response_get_response(SASL_RESPONSE_HANDLE sasl_response, amqp_binary* response_value)
+int sasl_response_get_response(SASL_RESPONSE_HANDLE sasl_response, amqp_binary response_value)
 {
     int result;
 
@@ -11770,14 +11777,16 @@ int amqpvalue_get_sasl_outcome(AMQP_VALUE value, SASL_OUTCOME_HANDLE* sasl_outco
                             }
                             else
                             {
-                                amqp_binary additional_data;
-                                if (amqpvalue_get_binary(item_value, &additional_data) != 0)
+                                amqp_binary additional_data = payload_create();
+                                if (amqpvalue_get_binary(item_value, additional_data) != 0)
                                 {
                                     amqpvalue_destroy(item_value);
                                     sasl_outcome_destroy(*sasl_outcome_handle);
                                     result = MU_FAILURE;
+                                    payload_destroy(&additional_data);
                                     break;
                                 }
+                                payload_destroy(&additional_data);
                             }
 
                             amqpvalue_destroy(item_value);
@@ -11878,7 +11887,7 @@ int sasl_outcome_set_code(SASL_OUTCOME_HANDLE sasl_outcome, sasl_code code_value
     return result;
 }
 
-int sasl_outcome_get_additional_data(SASL_OUTCOME_HANDLE sasl_outcome, amqp_binary* additional_data_value)
+int sasl_outcome_get_additional_data(SASL_OUTCOME_HANDLE sasl_outcome, amqp_binary additional_data_value)
 {
     int result;
 
@@ -15785,14 +15794,16 @@ int amqpvalue_get_properties(AMQP_VALUE value, PROPERTIES_HANDLE* properties_han
                             }
                             else
                             {
-                                amqp_binary user_id;
-                                if (amqpvalue_get_binary(item_value, &user_id) != 0)
+                                amqp_binary user_id = payload_create();
+                                if (amqpvalue_get_binary(item_value, user_id) != 0)
                                 {
                                     amqpvalue_destroy(item_value);
                                     properties_destroy(*properties_handle);
                                     result = MU_FAILURE;
+                                    payload_destroy(&user_id);
                                     break;
                                 }
+                                payload_destroy(&user_id);
                             }
 
                             amqpvalue_destroy(item_value);
@@ -16165,7 +16176,7 @@ int properties_set_message_id(PROPERTIES_HANDLE properties, AMQP_VALUE message_i
     return result;
 }
 
-int properties_get_user_id(PROPERTIES_HANDLE properties, amqp_binary* user_id_value)
+int properties_get_user_id(PROPERTIES_HANDLE properties, amqp_binary user_id_value)
 {
     int result;
 

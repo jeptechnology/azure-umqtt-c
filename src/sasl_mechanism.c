@@ -81,7 +81,7 @@ void saslmechanism_destroy(SASL_MECHANISM_HANDLE sasl_mechanism)
     }
 }
 
-int saslmechanism_get_init_bytes(SASL_MECHANISM_HANDLE sasl_mechanism, SASL_MECHANISM_BYTES* init_bytes)
+int saslmechanism_get_init_bytes(SASL_MECHANISM_HANDLE sasl_mechanism, SASL_MECHANISM_BYTES init_bytes)
 {
     int result;
 
@@ -135,7 +135,7 @@ const char* saslmechanism_get_mechanism_name(SASL_MECHANISM_HANDLE sasl_mechanis
     return result;
 }
 
-int saslmechanism_challenge(SASL_MECHANISM_HANDLE sasl_mechanism, const SASL_MECHANISM_BYTES* challenge_bytes, SASL_MECHANISM_BYTES* response_bytes)
+int saslmechanism_challenge(SASL_MECHANISM_HANDLE sasl_mechanism, const SASL_MECHANISM_BYTES challenge_bytes, SASL_MECHANISM_BYTES response_bytes)
 {
     int result;
 

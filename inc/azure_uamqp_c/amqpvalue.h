@@ -5,6 +5,7 @@
 #define AMQPVALUE_H
 
 #include "azure_uamqp_c/amqp_types.h"
+#include "azure_uamqp_c/payload.h"
 
 #ifdef __cplusplus
 #include <cstddef>
@@ -22,11 +23,9 @@ extern "C" {
     typedef unsigned char uuid[16];
     typedef int64_t timestamp;
 
-    typedef struct amqp_binary_TAG
-    {
-        const void* bytes;
-        uint32_t length;
-    } amqp_binary;
+#define MAGIC_BINARY_POINTER_FOR_CALLBACK (const void *)0xFFFFFFFF
+
+    typedef PAYLOAD *amqp_binary;
 
     /* type handling */
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_null);
@@ -59,7 +58,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_uuid, uuid, uuid_value);
     MOCKABLE_FUNCTION(, int, amqpvalue_get_uuid, AMQP_VALUE, value, uuid*, uuid_value);
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_binary, amqp_binary, binary_value);
-    MOCKABLE_FUNCTION(, int, amqpvalue_get_binary, AMQP_VALUE, value, amqp_binary*, binary_value);
+    MOCKABLE_FUNCTION(, int, amqpvalue_get_binary, AMQP_VALUE, value, amqp_binary, binary_value);
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_string, const char*, string_value);
     MOCKABLE_FUNCTION(, int, amqpvalue_get_string, AMQP_VALUE, value, const char**, string_value);
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_symbol, const char*, symbol_value);
@@ -88,7 +87,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_clone, AMQP_VALUE, value);
 
     /* encoding */
-    typedef int (*AMQPVALUE_ENCODER_OUTPUT)(void* context, const unsigned char* bytes, size_t length);
+    typedef int (*AMQPVALUE_ENCODER_OUTPUT)(void* context, PAYLOAD* payload);
 
     MOCKABLE_FUNCTION(, int, amqpvalue_encode, AMQP_VALUE, value, AMQPVALUE_ENCODER_OUTPUT, encoder_output, void*, context);
     MOCKABLE_FUNCTION(, int, amqpvalue_get_encoded_size, AMQP_VALUE, value, size_t*, encoded_size);

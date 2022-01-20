@@ -34,7 +34,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, int, transfer_set_handle, TRANSFER_HANDLE, transfer, handle, handle_value);
     MOCKABLE_FUNCTION(, int, transfer_get_delivery_id, TRANSFER_HANDLE, transfer, delivery_number*, delivery_id_value);
     MOCKABLE_FUNCTION(, int, transfer_set_delivery_id, TRANSFER_HANDLE, transfer, delivery_number, delivery_id_value);
-    MOCKABLE_FUNCTION(, int, transfer_get_delivery_tag, TRANSFER_HANDLE, transfer, delivery_tag*, delivery_tag_value);
+    MOCKABLE_FUNCTION(, int, transfer_get_delivery_tag, TRANSFER_HANDLE, transfer, delivery_tag, delivery_tag_value);
     MOCKABLE_FUNCTION(, int, transfer_set_delivery_tag, TRANSFER_HANDLE, transfer, delivery_tag, delivery_tag_value);
     MOCKABLE_FUNCTION(, int, transfer_get_message_format, TRANSFER_HANDLE, transfer, message_format*, message_format_value);
     MOCKABLE_FUNCTION(, int, transfer_set_message_format, TRANSFER_HANDLE, transfer, message_format, message_format_value);

@@ -160,11 +160,10 @@ static void on_delivery_settled(void* context, delivery_number delivery_no, LINK
     }
 }
 
-static int encode_bytes(void* context, const unsigned char* bytes, size_t length)
+static int encode_bytes(void* context, const PAYLOAD *to_append)
 {
     PAYLOAD* payload = (PAYLOAD*)context;
-    (void)memcpy((unsigned char*)payload->bytes + payload->length, bytes, length);
-    payload->length += length;
+    payload_append_payload_as_copy(payload, to_append);
     return 0;
 }
 
@@ -188,11 +187,22 @@ static void log_message_chunk(MESSAGE_SENDER_INSTANCE* message_sender, const cha
 #endif
 }
 
+static bool count_bytes(void *context, const unsigned char *buffer, size_t length)
+{
+   (void)buffer;
+
+   uint32_t* byte_count = (uint32_t*)context;
+   *byte_count += (uint32_t)length;
+
+   return true;
+}
+
 static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message_sender, ASYNC_OPERATION_HANDLE pending_send, MESSAGE_HANDLE message)
 {
     SEND_ONE_MESSAGE_RESULT result;
 
     size_t encoded_size;
+    size_t encoded_size_before_body = 0;
     size_t total_encoded_size = 0;
     MESSAGE_BODY_TYPE message_body_type;
     message_format message_format;
@@ -205,6 +215,8 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
     }
     else
     {
+        bool callback_found = false; // any parts of this message a callback?
+       
         // header
         HEADER_HANDLE header = NULL;
         AMQP_VALUE header_amqp_value = NULL;
@@ -236,7 +248,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                 }
                 else
                 {
-                    total_encoded_size += encoded_size;
+                    encoded_size_before_body += encoded_size;
                 }
             }
 
@@ -254,7 +266,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
             }
             else
             {
-                total_encoded_size += encoded_size;
+                encoded_size_before_body += encoded_size;
             }
         }
 
@@ -278,7 +290,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                 }
                 else
                 {
-                    total_encoded_size += encoded_size;
+                    encoded_size_before_body += encoded_size;
                 }
             }
         }
@@ -303,11 +315,13 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                 }
                 else
                 {
-                    total_encoded_size += encoded_size;
+                    encoded_size_before_body += encoded_size;
                 }
             }
         }
 
+        total_encoded_size = encoded_size_before_body;
+        
         if (is_error)
         {
             result = SEND_ONE_MESSAGE_ERROR;
@@ -359,7 +373,6 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
             case MESSAGE_BODY_TYPE_DATA:
             {
-                BINARY_DATA binary_data;
                 size_t i;
 
                 if (message_get_body_amqp_data_count(message, &body_data_count) != 0)
@@ -378,18 +391,22 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                     {
                         for (i = 0; i < body_data_count; i++)
                         {
-                            if (message_get_body_amqp_data_in_place(message, i, &binary_data) != 0)
+                            BINARY_DATA binary_data = message_get_body_amqp_data_in_place(message, i);
+
+                            if (!payload_is_valid(binary_data))
                             {
                                 LogError("Cannot get body AMQP data %u", (unsigned int)i);
                                 result = SEND_ONE_MESSAGE_ERROR;
                             }
                             else
                             {
+                                if (payload_has_callback_data(binary_data))
+                                {
+                                    callback_found = true;
+                                }
+
                                 AMQP_VALUE body_amqp_data;
-                                amqp_binary binary_value;
-                                binary_value.bytes = binary_data.bytes;
-                                binary_value.length = (uint32_t)binary_data.length;
-                                body_amqp_data = amqpvalue_create_data(binary_value);
+                                body_amqp_data = amqpvalue_create_data(binary_data);
                                 if (body_amqp_data == NULL)
                                 {
                                     LogError("Cannot create body AMQP data");
@@ -419,15 +436,22 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
             if (result == 0)
             {
-                void* data_bytes = malloc(total_encoded_size);
-                PAYLOAD payload;
-                payload.bytes = (const unsigned char*)data_bytes;
-                payload.length = 0;
+                PAYLOAD *payload = payload_create();
+                if (callback_found)
+                {
+                    const size_t padding_for_encoded_size = 8;   // this stops us getting lots of little payloads elements in the linked list
+                    payload_reserve_data(payload, encoded_size_before_body + padding_for_encoded_size);
+                }
+                else
+                {
+                    payload_reserve_data(payload, total_encoded_size);
+                }
+
                 result = SEND_ONE_MESSAGE_OK;
 
                 if (header != NULL)
                 {
-                    if (amqpvalue_encode(header_amqp_value, encode_bytes, &payload) != 0)
+                    if (amqpvalue_encode(header_amqp_value, encode_bytes, payload) != 0)
                     {
                         LogError("Cannot encode header value");
                         result = SEND_ONE_MESSAGE_ERROR;
@@ -438,7 +462,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
                 if ((result == SEND_ONE_MESSAGE_OK) && (msg_annotations != NULL))
                 {
-                    if (amqpvalue_encode(msg_annotations, encode_bytes, &payload) != 0)
+                    if (amqpvalue_encode(msg_annotations, encode_bytes, payload) != 0)
                     {
                         LogError("Cannot encode message annotations value");
                         result = SEND_ONE_MESSAGE_ERROR;
@@ -449,7 +473,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
                 if ((result == SEND_ONE_MESSAGE_OK) && (properties != NULL))
                 {
-                    if (amqpvalue_encode(properties_amqp_value, encode_bytes, &payload) != 0)
+                    if (amqpvalue_encode(properties_amqp_value, encode_bytes, payload) != 0)
                     {
                         LogError("Cannot encode message properties value");
                         result = SEND_ONE_MESSAGE_ERROR;
@@ -460,7 +484,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
                 if ((result == SEND_ONE_MESSAGE_OK) && (application_properties != NULL))
                 {
-                    if (amqpvalue_encode(application_properties_value, encode_bytes, &payload) != 0)
+                    if (amqpvalue_encode(application_properties_value, encode_bytes, payload) != 0)
                     {
                         LogError("Cannot encode application properties value");
                         result = SEND_ONE_MESSAGE_ERROR;
@@ -480,7 +504,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
 
                     case MESSAGE_BODY_TYPE_VALUE:
                     {
-                        if (amqpvalue_encode(body_amqp_value, encode_bytes, &payload) != 0)
+                        if (amqpvalue_encode(body_amqp_value, encode_bytes, payload) != 0)
                         {
                             LogError("Cannot encode body AMQP value");
                             result = SEND_ONE_MESSAGE_ERROR;
@@ -491,23 +515,19 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                     }
                     case MESSAGE_BODY_TYPE_DATA:
                     {
-                        BINARY_DATA binary_data;
                         size_t i;
 
                         for (i = 0; i < body_data_count; i++)
                         {
-                            if (message_get_body_amqp_data_in_place(message, i, &binary_data) != 0)
+                            BINARY_DATA binary_data = message_get_body_amqp_data_in_place(message, i);
+                            if (!payload_is_valid(binary_data))
                             {
                                 LogError("Cannot get AMQP data %u", (unsigned int)i);
                                 result = SEND_ONE_MESSAGE_ERROR;
                             }
                             else
                             {
-                                AMQP_VALUE body_amqp_data;
-                                amqp_binary binary_value;
-                                binary_value.bytes = binary_data.bytes;
-                                binary_value.length = (uint32_t)binary_data.length;
-                                body_amqp_data = amqpvalue_create_data(binary_value);
+                                AMQP_VALUE body_amqp_data = amqpvalue_create_data(binary_data);
                                 if (body_amqp_data == NULL)
                                 {
                                     LogError("Cannot create body AMQP data %u", (unsigned int)i);
@@ -515,16 +535,18 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                                 }
                                 else
                                 {
-                                    if (amqpvalue_encode(body_amqp_data, encode_bytes, &payload) != 0)
+                                    if (amqpvalue_encode(body_amqp_data, encode_bytes, payload) != 0)
                                     {
                                         LogError("Cannot encode body AMQP data %u", (unsigned int)i);
                                         result = SEND_ONE_MESSAGE_ERROR;
+                                        payload_destroy(&binary_data);
                                         break;
                                     }
 
                                     amqpvalue_destroy(body_amqp_data);
                                 }
                             }
+                            payload_destroy(&binary_data);
                         }
                         break;
                     }
@@ -538,7 +560,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                     MESSAGE_WITH_CALLBACK* message_with_callback = GET_ASYNC_OPERATION_CONTEXT(MESSAGE_WITH_CALLBACK, pending_send);
                     message_with_callback->message_send_state = MESSAGE_SEND_STATE_PENDING;
 
-                    transfer_async_operation = link_transfer_async(message_sender->link, message_format, &payload, 1, on_delivery_settled, pending_send, &link_transfer_error, message_with_callback->timeout);
+                    transfer_async_operation = link_transfer_async(message_sender->link, message_format, payload, on_delivery_settled, pending_send, &link_transfer_error, message_with_callback->timeout);
                     if (transfer_async_operation == NULL)
                     {
                         if (link_transfer_error == LINK_TRANSFER_BUSY)
@@ -558,7 +580,7 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                     }
                 }
 
-                free(data_bytes);
+                payload_destroy(&payload);
 
                 if (body_amqp_value != NULL)
                 {

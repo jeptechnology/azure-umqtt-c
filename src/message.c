@@ -10,12 +10,9 @@
 #include "azure_uamqp_c/amqp_definitions.h"
 #include "azure_uamqp_c/message.h"
 #include "azure_uamqp_c/amqpvalue.h"
+#include "azure_uamqp_c/payload.h"
 
-typedef struct BODY_AMQP_DATA_TAG
-{
-    unsigned char* body_data_section_bytes;
-    size_t body_data_section_length;
-} BODY_AMQP_DATA;
+typedef PAYLOAD* BODY_AMQP_DATA;
 
 typedef struct MESSAGE_INSTANCE_TAG
 {
@@ -63,10 +60,7 @@ static void free_all_body_data_items(MESSAGE_HANDLE message)
 
     for (i = 0; i < message->body_amqp_data_count; i++)
     {
-        if (message->body_amqp_data_items[i].body_data_section_bytes != NULL)
-        {
-            free(message->body_amqp_data_items[i].body_data_section_bytes);
-        }
+         payload_destroy(&message->body_amqp_data_items[i]);
     }
 
     if (message->body_amqp_data_items != NULL)
@@ -245,19 +239,7 @@ MESSAGE_HANDLE message_clone(MESSAGE_HANDLE source_message)
                 {
                     for (i = 0; i < source_message->body_amqp_data_count; i++)
                     {
-                        result->body_amqp_data_items[i].body_data_section_length = source_message->body_amqp_data_items[i].body_data_section_length;
-
-                        /* Codes_SRS_MESSAGE_01_011: [If an AMQP data has been set as message body on the source message it shall be cloned by allocating memory for the binary payload.] */
-                        result->body_amqp_data_items[i].body_data_section_bytes = (unsigned char*)malloc(source_message->body_amqp_data_items[i].body_data_section_length);
-                        if (result->body_amqp_data_items[i].body_data_section_bytes == NULL)
-                        {
-                            LogError("Cannot allocate memory for body data section %u", (unsigned int)i);
-                            break;
-                        }
-                        else
-                        {
-                            (void)memcpy(result->body_amqp_data_items[i].body_data_section_bytes, source_message->body_amqp_data_items[i].body_data_section_bytes, result->body_amqp_data_items[i].body_data_section_length);
-                        }
+                        result->body_amqp_data_items[i] = payload_clone(source_message->body_amqp_data_items[i]);
                     }
 
                     result->body_amqp_data_count = i;
@@ -997,11 +979,10 @@ int message_add_body_amqp_data(MESSAGE_HANDLE message, BINARY_DATA amqp_data)
     /* Codes_SRS_MESSAGE_01_088: [ If `message` is NULL, `message_add_body_amqp_data` shall fail and return a non-zero value. ]*/
     if ((message == NULL) ||
         /* Tests_SRS_MESSAGE_01_089: [ If the `bytes` member of `amqp_data` is NULL and the `size` member is non-zero, `message_add_body_amqp_data` shall fail and return a non-zero value. ]*/
-        ((amqp_data.bytes == NULL) &&
-         (amqp_data.length != 0)))
+        (!payload_is_valid(amqp_data)))
     {
-        LogError("Bad arguments: message = %p, bytes = %p, length = %u",
-            message, amqp_data.bytes, (unsigned int)amqp_data.length);
+        LogError("Bad arguments: message = %p, bytes = %p",
+            message, amqp_data);
         result = MU_FAILURE;
     }
     else
@@ -1027,35 +1008,11 @@ int message_add_body_amqp_data(MESSAGE_HANDLE message, BINARY_DATA amqp_data)
             else
             {
                 message->body_amqp_data_items = new_body_amqp_data_items;
+                message->body_amqp_data_items[message->body_amqp_data_count] = payload_clone(amqp_data);
+                message->body_amqp_data_count++;
 
-                if (amqp_data.length == 0)
-                {
-                    message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_bytes = NULL;
-                    message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_length = 0;
-                    message->body_amqp_data_count++;
-
-                    /* Codes_SRS_MESSAGE_01_087: [ On success it shall return 0. ]*/
-                    result = 0;
-                }
-                else
-                {
-                    message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_bytes = (unsigned char*)malloc(amqp_data.length);
-                    if (message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_bytes == NULL)
-                    {
-                        /* Codes_SRS_MESSAGE_01_153: [ If allocating memory to store the added AMQP data fails, `message_add_body_amqp_data` shall fail and return a non-zero value. ]*/
-                        LogError("Cannot allocate memory for body AMQP data to be added");
-                        result = MU_FAILURE;
-                    }
-                    else
-                    {
-                        message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_length = amqp_data.length;
-                        (void)memcpy(message->body_amqp_data_items[message->body_amqp_data_count].body_data_section_bytes, amqp_data.bytes, amqp_data.length);
-                        message->body_amqp_data_count++;
-
-                        /* Codes_SRS_MESSAGE_01_087: [ On success it shall return 0. ]*/
-                        result = 0;
-                    }
-                }
+                /* Codes_SRS_MESSAGE_01_087: [ On success it shall return 0. ]*/
+                result = 0;
             }
         }
     }
@@ -1063,17 +1020,14 @@ int message_add_body_amqp_data(MESSAGE_HANDLE message, BINARY_DATA amqp_data)
     return result;
 }
 
-int message_get_body_amqp_data_in_place(MESSAGE_HANDLE message, size_t index, BINARY_DATA* amqp_data)
+BINARY_DATA message_get_body_amqp_data_in_place(MESSAGE_HANDLE message, size_t index)
 {
-    int result;
+    BINARY_DATA result = NULL;
 
-    if ((message == NULL) ||
-        (amqp_data == NULL))
+    if (message == NULL)
     {
         /* Codes_SRS_MESSAGE_01_094: [ If `message` or `amqp_data` is NULL, `message_get_body_amqp_data_in_place` shall fail and return a non-zero value. ]*/
-        LogError("Bad arguments: message = %p, amqp_data = %p",
-            message, amqp_data);
-        result = MU_FAILURE;
+        LogError("Bad arguments: message = %p", message);
     }
     else
     {
@@ -1082,23 +1036,17 @@ int message_get_body_amqp_data_in_place(MESSAGE_HANDLE message, size_t index, BI
         {
             /* Codes_SRS_MESSAGE_01_096: [ If the body for `message` is not of type `MESSAGE_BODY_TYPE_DATA`, `message_get_body_amqp_data_in_place` shall fail and return a non-zero value. ]*/
             LogError("Body type is not AMQP data");
-            result = MU_FAILURE;
         }
         else if (index >= message->body_amqp_data_count)
         {
             /* Codes_SRS_MESSAGE_01_095: [ If `index` indicates an AMQP data entry that is out of bounds, `message_get_body_amqp_data_in_place` shall fail and return a non-zero value. ]*/
             LogError("Index too high for AMQP data (%lu), number of AMQP data entries is %lu",
                 (unsigned long)index, (unsigned long)message->body_amqp_data_count);
-            result = MU_FAILURE;
         }
         else
         {
             /* Codes_SRS_MESSAGE_01_092: [ `message_get_body_amqp_data_in_place` shall place the contents of the `index`th AMQP data for the message instance identified by `message` into the argument `amqp_data`, without copying the binary payload memory. ]*/
-            amqp_data->bytes = message->body_amqp_data_items[index].body_data_section_bytes;
-            amqp_data->length = message->body_amqp_data_items[index].body_data_section_length;
-
-            /* Codes_SRS_MESSAGE_01_093: [ On success, `message_get_body_amqp_data_in_place` shall return 0. ]*/
-            result = 0;
+            result = payload_clone(message->body_amqp_data_items[index]);
         }
     }
 

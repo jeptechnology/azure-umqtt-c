@@ -32,7 +32,7 @@ extern "C" {
 
     MOCKABLE_FUNCTION(, int, sasl_outcome_get_code, SASL_OUTCOME_HANDLE, sasl_outcome, sasl_code*, code_value);
     MOCKABLE_FUNCTION(, int, sasl_outcome_set_code, SASL_OUTCOME_HANDLE, sasl_outcome, sasl_code, code_value);
-    MOCKABLE_FUNCTION(, int, sasl_outcome_get_additional_data, SASL_OUTCOME_HANDLE, sasl_outcome, amqp_binary*, additional_data_value);
+    MOCKABLE_FUNCTION(, int, sasl_outcome_get_additional_data, SASL_OUTCOME_HANDLE, sasl_outcome, amqp_binary, additional_data_value);
     MOCKABLE_FUNCTION(, int, sasl_outcome_set_additional_data, SASL_OUTCOME_HANDLE, sasl_outcome, amqp_binary, additional_data_value);
 
 

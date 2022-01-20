@@ -30,7 +30,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, int, amqpvalue_get_sasl_challenge, AMQP_VALUE, value, SASL_CHALLENGE_HANDLE*, SASL_CHALLENGE_handle);
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_sasl_challenge, SASL_CHALLENGE_HANDLE, sasl_challenge);
 
-    MOCKABLE_FUNCTION(, int, sasl_challenge_get_challenge, SASL_CHALLENGE_HANDLE, sasl_challenge, amqp_binary*, challenge_value);
+    MOCKABLE_FUNCTION(, int, sasl_challenge_get_challenge, SASL_CHALLENGE_HANDLE, sasl_challenge, amqp_binary, challenge_value);
     MOCKABLE_FUNCTION(, int, sasl_challenge_set_challenge, SASL_CHALLENGE_HANDLE, sasl_challenge, amqp_binary, challenge_value);
 
 

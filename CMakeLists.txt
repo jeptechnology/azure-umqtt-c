@@ -215,6 +215,7 @@ set(uamqp_c_files
     ./src/message_receiver.c
     ./src/message_sender.c
     ./src/messaging.c
+    ./src/payload.c
     ./src/sasl_anonymous.c
     ./src/sasl_frame_codec.c
     ./src/sasl_mechanism.c

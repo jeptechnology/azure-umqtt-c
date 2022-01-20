@@ -45,7 +45,7 @@ static void saslanonymous_destroy(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_
     }
 }
 
-static int saslanonymous_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES* init_bytes)
+static int saslanonymous_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES init_bytes)
 {
     int result;
 
@@ -60,9 +60,8 @@ static int saslanonymous_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mech
     else
     {
         /* Codes_SRS_SASL_ANONYMOUS_01_012: [The bytes field of `init_buffer` shall be set to NULL.] */
-        init_bytes->bytes = NULL;
         /* Codes_SRS_SASL_ANONYMOUS_01_006: [`saslanonymous_get_init_bytes` shall validate the `concrete_sasl_mechanism` argument and set the length of the `init_bytes` argument to be zero.] */
-        init_bytes->length = 0;
+        init_bytes  = NULL;
 
         /* Codes_SRS_SASL_ANONYMOUS_01_011: [On success `saslanonymous_get_init_bytes` shall return zero.] */
         result = 0;
@@ -90,7 +89,7 @@ static const char* saslanonymous_get_mechanism_name(CONCRETE_SASL_MECHANISM_HAND
     return result;
 }
 
-static int saslanonymous_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES* challenge_bytes, SASL_MECHANISM_BYTES* response_bytes)
+static int saslanonymous_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES challenge_bytes, SASL_MECHANISM_BYTES response_bytes)
 {
     int result;
 
@@ -107,8 +106,7 @@ static int saslanonymous_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_
     else
     {
         /* Codes_SRS_SASL_ANONYMOUS_01_013: [`saslanonymous_challenge` shall set the `buffer` field to NULL and `size` to 0 in the `response_bytes` argument as the ANONYMOUS SASL mechanism does not implement challenge/response.] */
-        response_bytes->bytes = NULL;
-        response_bytes->length = 0;
+        response_bytes = NULL;
 
         /* Codes_SRS_SASL_ANONYMOUS_01_014: [On success, `saslanonymous_challenge` shall return 0.] */
         result = 0;

@@ -30,7 +30,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, int, amqpvalue_get_sasl_response, AMQP_VALUE, value, SASL_RESPONSE_HANDLE*, SASL_RESPONSE_handle);
     MOCKABLE_FUNCTION(, AMQP_VALUE, amqpvalue_create_sasl_response, SASL_RESPONSE_HANDLE, sasl_response);
 
-    MOCKABLE_FUNCTION(, int, sasl_response_get_response, SASL_RESPONSE_HANDLE, sasl_response, amqp_binary*, response_value);
+    MOCKABLE_FUNCTION(, int, sasl_response_get_response, SASL_RESPONSE_HANDLE, sasl_response, amqp_binary, response_value);
     MOCKABLE_FUNCTION(, int, sasl_response_set_response, SASL_RESPONSE_HANDLE, sasl_response, amqp_binary, response_value);
 
 

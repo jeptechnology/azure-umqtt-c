@@ -1348,7 +1348,7 @@ static void link_transfer_cancel_handler(ASYNC_OPERATION_HANDLE link_transfer_op
     async_operation_destroy(link_transfer_operation);
 }
 
-ASYNC_OPERATION_HANDLE link_transfer_async(LINK_HANDLE link, message_format message_format, PAYLOAD* payloads, size_t payload_count, ON_DELIVERY_SETTLED on_delivery_settled, void* callback_context, LINK_TRANSFER_RESULT* link_transfer_error, tickcounter_ms_t timeout)
+ASYNC_OPERATION_HANDLE link_transfer_async(LINK_HANDLE link, message_format message_format, PAYLOAD* payloads, ON_DELIVERY_SETTLED on_delivery_settled, void* callback_context, LINK_TRANSFER_RESULT* link_transfer_error, tickcounter_ms_t timeout)
 {
     ASYNC_OPERATION_HANDLE result;
 
@@ -1404,14 +1404,12 @@ ASYNC_OPERATION_HANDLE link_transfer_async(LINK_HANDLE link, message_format mess
                 else
                 {
                     sequence_no delivery_count = link->delivery_count + 1;
-                    unsigned char delivery_tag_bytes[sizeof(delivery_count)];
-                    delivery_tag delivery_tag;
+                    delivery_tag delivery_tag = payload_create();
                     bool settled;
 
-                    (void)memcpy(delivery_tag_bytes, &delivery_count, sizeof(delivery_count));
+                    payload_reserve_data(delivery_tag, sizeof(delivery_count));
+                    payload_append_data(delivery_tag, (const unsigned char *)&delivery_count, sizeof(delivery_count));
 
-                    delivery_tag.bytes = &delivery_tag_bytes;
-                    delivery_tag.length = sizeof(delivery_tag_bytes);
 
                     if (link->snd_settle_mode == sender_settle_mode_unsettled)
                     {
@@ -1491,7 +1489,7 @@ ASYNC_OPERATION_HANDLE link_transfer_async(LINK_HANDLE link, message_format mess
                                     else
                                     {
                                         /* here we should feed data to the transfer frame */
-                                        switch (session_send_transfer(link->link_endpoint, transfer, payloads, payload_count, &pending_delivery->delivery_id, (settled) ? on_send_complete : NULL, delivery_instance_list_item))
+                                        switch (session_send_transfer(link->link_endpoint, transfer, payloads, &pending_delivery->delivery_id, (settled) ? on_send_complete : NULL, delivery_instance_list_item))
                                         {
                                         default:
                                         case SESSION_SEND_TRANSFER_ERROR:
@@ -1531,7 +1529,8 @@ ASYNC_OPERATION_HANDLE link_transfer_async(LINK_HANDLE link, message_format mess
                             amqpvalue_destroy(transfer_value);
                         }
                     }
-
+                    
+                    payload_destroy(&delivery_tag);
                     transfer_destroy(transfer);
                 }
             }

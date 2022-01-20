@@ -169,7 +169,7 @@ static int send_end_frame(SESSION_INSTANCE* session_instance, ERROR_HANDLE error
             }
             else
             {
-                if (connection_encode_frame(session_instance->endpoint, end_performative_value, NULL, 0, NULL, NULL) != 0)
+                if (connection_encode_frame(session_instance->endpoint, end_performative_value, NULL, NULL, NULL) != 0)
                 {
                     result = MU_FAILURE;
                 }
@@ -246,7 +246,7 @@ static int send_begin(SESSION_INSTANCE* session_instance)
             }
             else
             {
-                if (connection_encode_frame(session_instance->endpoint, begin_performative_value, NULL, 0, NULL, NULL) != 0)
+                if (connection_encode_frame(session_instance->endpoint, begin_performative_value, NULL, NULL, NULL) != 0)
                 {
                     result = MU_FAILURE;
                 }
@@ -295,7 +295,7 @@ static int send_flow(SESSION_INSTANCE* session)
                 }
                 else
                 {
-                    if (connection_encode_frame(session->endpoint, flow_performative_value, NULL, 0, NULL, NULL) != 0)
+                    if (connection_encode_frame(session->endpoint, flow_performative_value, NULL, NULL, NULL) != 0)
                     {
                         result = MU_FAILURE;
                     }
@@ -1229,7 +1229,7 @@ int session_start_link_endpoint(LINK_ENDPOINT_HANDLE link_endpoint, ON_ENDPOINT_
     return result;
 }
 
-static int encode_frame(LINK_ENDPOINT_HANDLE link_endpoint, AMQP_VALUE performative, PAYLOAD* payloads, size_t payload_count)
+static int encode_frame(LINK_ENDPOINT_HANDLE link_endpoint, AMQP_VALUE performative, PAYLOAD* payloads)
 {
     int result;
 
@@ -1243,7 +1243,7 @@ static int encode_frame(LINK_ENDPOINT_HANDLE link_endpoint, AMQP_VALUE performat
         LINK_ENDPOINT_INSTANCE* link_endpoint_instance = (LINK_ENDPOINT_INSTANCE*)link_endpoint;
         SESSION_INSTANCE* session_instance = (SESSION_INSTANCE*)link_endpoint_instance->session;
 
-        if (connection_encode_frame(session_instance->endpoint, performative, payloads, payload_count, NULL, NULL) != 0)
+        if (connection_encode_frame(session_instance->endpoint, performative, payloads, NULL, NULL) != 0)
         {
             result = MU_FAILURE;
         }
@@ -1299,7 +1299,7 @@ int session_send_flow(LINK_ENDPOINT_HANDLE link_endpoint, FLOW_HANDLE flow)
                 }
                 else
                 {
-                    if (encode_frame(link_endpoint, flow_performative_value, NULL, 0) != 0)
+                    if (encode_frame(link_endpoint, flow_performative_value, NULL) != 0)
                     {
                         result = MU_FAILURE;
                     }
@@ -1343,7 +1343,7 @@ int session_send_attach(LINK_ENDPOINT_HANDLE link_endpoint, ATTACH_HANDLE attach
             }
             else
             {
-                if (encode_frame(link_endpoint, attach_performative_value, NULL, 0) != 0)
+                if (encode_frame(link_endpoint, attach_performative_value, NULL) != 0)
                 {
                     result = MU_FAILURE;
                 }
@@ -1378,7 +1378,7 @@ int session_send_disposition(LINK_ENDPOINT_HANDLE link_endpoint, DISPOSITION_HAN
         }
         else
         {
-            if (encode_frame(link_endpoint, disposition_performative_value, NULL, 0) != 0)
+            if (encode_frame(link_endpoint, disposition_performative_value, NULL) != 0)
             {
                 result = MU_FAILURE;
             }
@@ -1420,7 +1420,7 @@ int session_send_detach(LINK_ENDPOINT_HANDLE link_endpoint, DETACH_HANDLE detach
             }
             else
             {
-                if (encode_frame(link_endpoint, detach_performative_value, NULL, 0) != 0)
+                if (encode_frame(link_endpoint, detach_performative_value, NULL) != 0)
                 {
                     result = MU_FAILURE;
                 }
@@ -1437,8 +1437,103 @@ int session_send_detach(LINK_ENDPOINT_HANDLE link_endpoint, DETACH_HANDLE detach
     return result;
 }
 
+typedef struct 
+{
+   SESSION_INSTANCE* session_instance;
+   TRANSFER_HANDLE transfer;
+   ON_SEND_COMPLETE on_send_complete;
+   void* callback_context;
+   
+   struct 
+   {
+      unsigned char *data;
+      size_t         size;
+      size_t         capacity;
+   } buffer;
+
+   bool moreToCome;
+   SESSION_SEND_TRANSFER_RESULT result;
+} SessionStreamingContext;
+
+static const uint32_t MAX_FRAME_SIZE = 1024;
+
+static void session_stream_flush_buffer(SessionStreamingContext *context)
+{
+   AMQP_VALUE multi_transfer_amqp_value;
+
+   do
+   {
+      if (transfer_set_more(context->transfer, context->moreToCome) != 0)
+      {
+         context->result = SESSION_SEND_TRANSFER_ERROR;
+         break;
+      }
+
+      multi_transfer_amqp_value = amqpvalue_create_transfer(context->transfer);
+      if (multi_transfer_amqp_value == NULL)
+      {
+         context->result = SESSION_SEND_TRANSFER_ERROR;
+         break;
+      }
+
+      PAYLOAD* transfer_frame_payloads = payload_create();
+      payload_append_data(transfer_frame_payloads, context->buffer.data, context->buffer.size);
+
+      if (connection_encode_frame(context->session_instance->endpoint,
+         multi_transfer_amqp_value,
+         transfer_frame_payloads,
+         context->on_send_complete,
+         context->callback_context) != 0)
+      {
+         context->result = SESSION_SEND_TRANSFER_ERROR;
+         payload_destroy(&transfer_frame_payloads);
+         amqpvalue_destroy(multi_transfer_amqp_value);
+         break;
+      }
+
+      payload_destroy(&transfer_frame_payloads);
+      amqpvalue_destroy(multi_transfer_amqp_value);
+   } while (0);
+}
+
+static bool session_stream_payload(void *generic_context, const unsigned char *buffer, size_t length)
+{
+   size_t bytes_written = 0;
+   SessionStreamingContext *context = (SessionStreamingContext *)generic_context;
+
+   size_t spare_capacity = context->buffer.capacity - context->buffer.size;
+
+   // keep filling the buffer and writing the data 
+   while (context->result == SESSION_SEND_TRANSFER_OK && length > spare_capacity)
+   {
+      memcpy(&context->buffer.data[context->buffer.size], buffer, spare_capacity);
+      context->buffer.size += spare_capacity;
+      bytes_written += spare_capacity;
+
+      context->moreToCome = true;
+      session_stream_flush_buffer(context);
+      context->moreToCome = false;
+
+      length -= spare_capacity;
+      buffer += spare_capacity;
+      context->buffer.size = 0;
+      spare_capacity = context->buffer.capacity;
+   }
+
+   if (context->result == SESSION_SEND_TRANSFER_OK)
+   {
+      // finally copy the last remnant onto the buffer
+      memcpy(&context->buffer.data[context->buffer.size], buffer, length);
+      context->buffer.size += length;
+      bytes_written += length;
+      return true;
+   }
+
+   return false;
+}
+
 /* Codes_S_R_S_SESSION_01_051: [session_send_transfer shall send a transfer frame with the performative indicated in the transfer argument.] */
-SESSION_SEND_TRANSFER_RESULT session_send_transfer(LINK_ENDPOINT_HANDLE link_endpoint, TRANSFER_HANDLE transfer, PAYLOAD* payloads, size_t payload_count, delivery_number* delivery_id, ON_SEND_COMPLETE on_send_complete, void* callback_context)
+SESSION_SEND_TRANSFER_RESULT session_send_transfer(LINK_ENDPOINT_HANDLE link_endpoint, TRANSFER_HANDLE transfer, PAYLOAD* payloads, delivery_number* delivery_id, ON_SEND_COMPLETE on_send_complete, void* callback_context)
 {
     SESSION_SEND_TRANSFER_RESULT result;
 
@@ -1460,22 +1555,9 @@ SESSION_SEND_TRANSFER_RESULT session_send_transfer(LINK_ENDPOINT_HANDLE link_end
         }
         else
         {
-            size_t payload_size = 0;
-            size_t i;
-
-            for (i = 0; i < payload_count; i++)
-            {
-                if ((payloads[i].length > UINT32_MAX) ||
-                    (payload_size + payloads[i].length < payload_size))
-                {
-                    break;
-                }
-
-                payload_size += payloads[i].length;
-            }
-
-            if ((i < payload_count) ||
-                (payload_size > UINT32_MAX))
+         size_t payload_size = payload_get_length(payloads);
+         //DPRINTF_AMQP("Payload size = %d\n", (uint32_t)payload_size);
+         if(payload_size > UINT32_MAX)
             {
                 result = SESSION_SEND_TRANSFER_ERROR;
             }
@@ -1519,20 +1601,14 @@ SESSION_SEND_TRANSFER_RESULT session_send_transfer(LINK_ENDPOINT_HANDLE link_end
                             }
                             else
                             {
-                                payload_size = 0;
-
-                                for (i = 0; i < payload_count; i++)
-                                {
-                                    payload_size += payloads[i].length;
-                                }
-
                                 available_frame_size -= (uint32_t)encoded_size;
                                 available_frame_size -= 8;
 
+                                // [JEP] if the frame size is not determinate we force a streamed approach
                                 if (available_frame_size >= payload_size)
                                 {
                                     /* Codes_S_R_S_SESSION_01_055: [The encoding of the frame shall be done by calling connection_encode_frame and passing as arguments: the connection handle associated with the session, the transfer performative and the payload chunks passed to session_send_transfer.] */
-                                    if (connection_encode_frame(session_instance->endpoint, transfer_value, payloads, payload_count, on_send_complete, callback_context) != 0)
+                                    if (connection_encode_frame(session_instance->endpoint, transfer_value, payloads, on_send_complete, callback_context) != 0)
                                     {
                                         /* Codes_S_R_S_SESSION_01_056: [If connection_encode_frame fails then session_send_transfer shall fail and return a non-zero value.] */
                                         result = SESSION_SEND_TRANSFER_ERROR;
@@ -1550,126 +1626,44 @@ SESSION_SEND_TRANSFER_RESULT session_send_transfer(LINK_ENDPOINT_HANDLE link_end
                                 }
                                 else
                                 {
-                                    size_t current_payload_index = 0;
-                                    uint32_t current_payload_pos = 0;
-
-                                    /* break it down into different deliveries */
-                                    while (payload_size > 0)
+                                    if (available_frame_size > MAX_FRAME_SIZE)
                                     {
-                                        uint32_t transfer_frame_payload_count = 0;
-                                        uint32_t current_transfer_frame_payload_size = (uint32_t)payload_size;
-                                        uint32_t byte_counter;
-                                        size_t temp_current_payload_index = current_payload_index;
-                                        uint32_t temp_current_payload_pos = current_payload_pos;
-                                        AMQP_VALUE multi_transfer_amqp_value;
-                                        PAYLOAD* transfer_frame_payloads;
-                                        bool more;
-
-                                        if (current_transfer_frame_payload_size > available_frame_size)
-                                        {
-                                            current_transfer_frame_payload_size = available_frame_size;
-                                        }
-
-                                        if (available_frame_size >= payload_size)
-                                        {
-                                            more = false;
-                                        }
-                                        else
-                                        {
-                                            more = true;
-                                        }
-
-                                        if (transfer_set_more(transfer, more) != 0)
-                                        {
-                                            break;
-                                        }
-
-                                        multi_transfer_amqp_value = amqpvalue_create_transfer(transfer);
-                                        if (multi_transfer_amqp_value == NULL)
-                                        {
-                                            break;
-                                        }
-
-                                        byte_counter = current_transfer_frame_payload_size;
-                                        while (byte_counter > 0)
-                                        {
-                                            if (payloads[temp_current_payload_index].length - temp_current_payload_pos >= byte_counter)
-                                            {
-                                                /* more data than we need */
-                                                temp_current_payload_pos += byte_counter;
-                                                byte_counter = 0;
-                                            }
-                                            else
-                                            {
-                                                byte_counter -= (uint32_t)payloads[temp_current_payload_index].length - temp_current_payload_pos;
-                                                temp_current_payload_index++;
-                                                temp_current_payload_pos = 0;
-                                            }
-                                        }
-
-                                        transfer_frame_payload_count = (uint32_t)(temp_current_payload_index - current_payload_index + 1);
-                                        transfer_frame_payloads = (PAYLOAD*)calloc(1, (transfer_frame_payload_count * sizeof(PAYLOAD)));
-                                        if (transfer_frame_payloads == NULL)
-                                        {
-                                            amqpvalue_destroy(multi_transfer_amqp_value);
-                                            break;
-                                        }
-
-                                        /* copy data */
-                                        byte_counter = current_transfer_frame_payload_size;
-                                        transfer_frame_payload_count = 0;
-
-                                        while (byte_counter > 0)
-                                        {
-                                            if (payloads[current_payload_index].length - current_payload_pos > byte_counter)
-                                            {
-                                                /* more data than we need */
-                                                transfer_frame_payloads[transfer_frame_payload_count].bytes = payloads[current_payload_index].bytes + current_payload_pos;
-                                                transfer_frame_payloads[transfer_frame_payload_count].length = byte_counter;
-                                                current_payload_pos += byte_counter;
-                                                byte_counter = 0;
-                                            }
-                                            else
-                                            {
-                                                /* copy entire payload and move to the next */
-                                                transfer_frame_payloads[transfer_frame_payload_count].bytes = payloads[current_payload_index].bytes + current_payload_pos;
-                                                transfer_frame_payloads[transfer_frame_payload_count].length = payloads[current_payload_index].length - current_payload_pos;
-                                                byte_counter -= (uint32_t)payloads[current_payload_index].length - current_payload_pos;
-                                                current_payload_index++;
-                                                current_payload_pos = 0;
-                                            }
-
-                                            transfer_frame_payload_count++;
-                                        }
-
-                                        if (connection_encode_frame(session_instance->endpoint, multi_transfer_amqp_value, transfer_frame_payloads, transfer_frame_payload_count,
-                                            /* only fire the send complete calllback on the last frame of the multi frame transfer */
-                                            more ? NULL : on_send_complete,
-                                            callback_context) != 0)
-                                        {
-                                            free(transfer_frame_payloads);
-                                            amqpvalue_destroy(multi_transfer_amqp_value);
-                                            break;
-                                        }
-
-                                        free(transfer_frame_payloads);
-                                        amqpvalue_destroy(multi_transfer_amqp_value);
-                                        payload_size -= current_transfer_frame_payload_size;
+                                       available_frame_size = MAX_FRAME_SIZE;
                                     }
 
-                                    if (payload_size > 0)
+                                    unsigned char *buffer = (unsigned char *)malloc(available_frame_size);
+                                    SessionStreamingContext streaming_context =
                                     {
-                                        result = SESSION_SEND_TRANSFER_ERROR;
+                                       .session_instance = session_instance,
+                                       .transfer = transfer,
+                                       .on_send_complete = on_send_complete,
+                                       .callback_context = callback_context,
+                                       .buffer = {
+                                          .data = buffer,
+                                          .size = 0,
+                                          .capacity = available_frame_size
+                                       },
+                                       .moreToCome = false,
+                                       .result = SESSION_SEND_TRANSFER_OK
+                                    };
+
+                                    if (!payload_stream_output(payloads, session_stream_payload, &streaming_context))
+                                    {
+                                       result = SESSION_SEND_TRANSFER_ERROR;
                                     }
                                     else
                                     {
-                                        /* Codes_S_R_S_SESSION_01_018: [is incremented after each successive transfer according to RFC-1982 [RFC1982] serial number arithmetic.] */
-                                        session_instance->next_outgoing_id++;
-                                        session_instance->remote_incoming_window--;
-                                        session_instance->outgoing_window--;
-
-                                        result = SESSION_SEND_TRANSFER_OK;
+                                       session_stream_flush_buffer(&streaming_context);
+                                       result = streaming_context.result;
+                                       if (result == SESSION_SEND_TRANSFER_OK)
+                                       {
+                                          /* Codes_SRS_SESSION_01_018: [is incremented after each successive transfer according to RFC-1982 [RFC1982] serial number arithmetic.] */
+                                          session_instance->next_outgoing_id++;
+                                          session_instance->remote_incoming_window--;
+                                          session_instance->outgoing_window--;
+                                       }
                                     }
+                                    free(buffer);
                                 }
                             }
 

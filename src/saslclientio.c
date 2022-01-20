@@ -497,16 +497,23 @@ static void on_underlying_io_bytes_received(void* context, const unsigned char* 
     }
 }
 
-static void on_bytes_encoded(void* context, const unsigned char* bytes, size_t length, bool encode_complete)
+
+static bool stream_output(void *context, const unsigned char *bytes, size_t length)
 {
+   SASL_CLIENT_IO_INSTANCE* sasl_client_io_instance = (SASL_CLIENT_IO_INSTANCE*)context;
+   return (xio_send(sasl_client_io_instance->underlying_io, bytes, length, NULL, NULL) == 0);
+}
+
+static void on_bytes_encoded(void* context, PAYLOAD *payload, bool encode_complete)
+{
+   (void)encode_complete;
+
     SASL_CLIENT_IO_INSTANCE* sasl_client_io_instance = (SASL_CLIENT_IO_INSTANCE*)context;
 
-    (void)encode_complete;
-
-    /* Codes_SRS_SASLCLIENTIO_01_120: [When SASL client IO is notified by `sasl_frame_codec` of bytes that have been encoded via the `on_bytes_encoded` callback and SASL client IO is in the state OPENING, SASL client IO shall send these bytes by using `xio_send`.]*/
-    if (xio_send(sasl_client_io_instance->underlying_io, bytes, length, unchecked_on_send_complete, NULL) != 0)
+    /* Codes_SRS_SASLCLIENTIO_01_120: [When SASL client IO is notified by sasl_frame_codec of bytes that have been encoded via the on_bytes_encoded callback and SASL client IO is in the state OPENING, SASL client IO shall send these bytes by using xio_send.] */
+    if (!payload_stream_output(payload, stream_output, context))
     {
-        /* Codes_SRS_SASLCLIENTIO_01_121: [If `xio_send` fails, the `on_io_error` callback shall be triggered.]*/
+       /* Codes_SRS_SASLCLIENTIO_01_121: [If xio_send fails, the SASL client IO state shall be switched to IO_STATE_ERROR and the on_state_changed callback shall be triggered.] */
         LogError("xio_send failed");
         handle_error(sasl_client_io_instance);
     }
@@ -517,10 +524,7 @@ static int send_sasl_init(SASL_CLIENT_IO_INSTANCE* sasl_client_io, const char* s
     int result;
 
     SASL_INIT_HANDLE sasl_init;
-    SASL_MECHANISM_BYTES init_bytes;
-
-    init_bytes.length = 0;
-    init_bytes.bytes = NULL;
+    SASL_MECHANISM_BYTES init_bytes = payload_create();
 
     /* Codes_SRS_SASLCLIENTIO_01_045: [The name of the SASL mechanism used for the SASL exchange.] */
     sasl_init = sasl_init_create(sasl_mechanism_name);
@@ -533,7 +537,7 @@ static int send_sasl_init(SASL_CLIENT_IO_INSTANCE* sasl_client_io, const char* s
     else
     {
         /* Codes_SRS_SASLCLIENTIO_01_048: [The contents of this data are defined by the SASL security mechanism.] */
-        if (saslmechanism_get_init_bytes(sasl_client_io->sasl_mechanism, &init_bytes) != 0)
+        if (saslmechanism_get_init_bytes(sasl_client_io->sasl_mechanism, init_bytes) != 0)
         {
             /* Codes_SRS_SASLCLIENTIO_01_119: [If any error is encountered when parsing the received frame, the `on_io_open_complete` callback shall be triggered with `IO_OPEN_ERROR`.]*/
             LogError("Could not get SASL init bytes");
@@ -541,12 +545,9 @@ static int send_sasl_init(SASL_CLIENT_IO_INSTANCE* sasl_client_io, const char* s
         }
         else
         {
-            amqp_binary creds;
-            creds.bytes = init_bytes.bytes;
-            creds.length = init_bytes.length;
-            if ((init_bytes.length > 0) &&
+            if ((payload_get_length(init_bytes) > 0) &&
                 /* Codes_SRS_SASLCLIENTIO_01_047: [A block of opaque data passed to the security mechanism.] */
-                (sasl_init_set_initial_response(sasl_init, creds) != 0))
+                (sasl_init_set_initial_response(sasl_init, init_bytes) != 0))
             {
                 /* Codes_SRS_SASLCLIENTIO_01_119: [If any error is encountered when parsing the received frame, the `on_io_open_complete` callback shall be triggered with `IO_OPEN_ERROR`.]*/
                 LogError("Could not set initial response");
@@ -588,6 +589,8 @@ static int send_sasl_init(SASL_CLIENT_IO_INSTANCE* sasl_client_io, const char* s
         sasl_init_destroy(sasl_init);
     }
 
+    payload_destroy(&init_bytes);
+
     return result;
 }
 
@@ -596,14 +599,10 @@ static int send_sasl_response(SASL_CLIENT_IO_INSTANCE* sasl_client_io, SASL_MECH
     int result;
 
     SASL_RESPONSE_HANDLE sasl_response_handle;
-    amqp_binary response_binary_value;
-
-    response_binary_value.bytes = sasl_response.bytes;
-    response_binary_value.length = sasl_response.length;
 
     /* Codes_SRS_SASLCLIENTIO_01_055: [Send the SASL response data as defined by the SASL specification.] */
     /* Codes_SRS_SASLCLIENTIO_01_056: [A block of opaque data passed to the security mechanism.] */
-    if ((sasl_response_handle = sasl_response_create(response_binary_value)) == NULL)
+    if ((sasl_response_handle = sasl_response_create(sasl_response)) == NULL)
     {
         LogError("Could not create SASL response");
         result = MU_FAILURE;
@@ -819,13 +818,11 @@ static void on_sasl_frame_received_callback(void* context, AMQP_VALUE sasl_frame
                         }
                         else
                         {
-                            amqp_binary challenge_binary_value;
-
-                            challenge_binary_value.bytes = NULL;
-                            challenge_binary_value.length = 0;
+                            amqp_binary challenge_binary_value = payload_create();
+                            SASL_MECHANISM_BYTES response_bytes = payload_create();
 
                             /* Codes_SRS_SASLCLIENTIO_01_053: [Challenge information, a block of opaque binary data passed to the security mechanism.] */
-                            if (sasl_challenge_get_challenge(sasl_challenge_handle, &challenge_binary_value) != 0)
+                            if (sasl_challenge_get_challenge(sasl_challenge_handle, challenge_binary_value) != 0)
                             {
                                 /* Codes_SRS_SASLCLIENTIO_01_119: [If any error is encountered when parsing the received frame, the `on_io_open_complete` callback shall be triggered with `IO_OPEN_ERROR`.]*/
                                 LogError("Cannot get SASL challenge binary value");
@@ -833,17 +830,9 @@ static void on_sasl_frame_received_callback(void* context, AMQP_VALUE sasl_frame
                             }
                             else
                             {
-                                SASL_MECHANISM_BYTES challenge;
-                                SASL_MECHANISM_BYTES response_bytes;
-
-                                challenge.bytes = challenge_binary_value.bytes;
-                                challenge.length = challenge_binary_value.length;
-                                response_bytes.bytes = NULL;
-                                response_bytes.length = 0;
-
                                 /* Codes_SRS_SASLCLIENTIO_01_057: [The contents of this data are defined by the SASL security mechanism.] */
                                 /* Codes_SRS_SASLCLIENTIO_01_037: [SASL-RESPONSE -->] */
-                                if (saslmechanism_challenge(sasl_client_io_instance->sasl_mechanism, &challenge, &response_bytes) != 0)
+                                if ((saslmechanism_challenge(sasl_client_io_instance->sasl_mechanism, challenge_binary_value, response_bytes) != 0))
                                 {
                                     /* Codes_SRS_SASLCLIENTIO_01_119: [If any error is encountered when parsing the received frame, the `on_io_open_complete` callback shall be triggered with `IO_OPEN_ERROR`.]*/
                                     LogError("SASL Challenge failed");

@@ -186,6 +186,7 @@ typedef struct INTERNAL_DECODER_DATA_TAG
     ON_VALUE_DECODED on_value_decoded;
     void* on_value_decoded_context;
     size_t bytes_decoded;
+    size_t upcoming_binary_length;
     DECODER_STATE decoder_state;
     uint8_t constructor_byte;
     AMQP_VALUE_DATA* decode_to_value;
@@ -972,8 +973,7 @@ int amqpvalue_get_uuid(AMQP_VALUE value, uuid* uuid_value)
 AMQP_VALUE amqpvalue_create_binary(amqp_binary value)
 {
     AMQP_VALUE result;
-    if ((value.bytes == NULL) &&
-        (value.length > 0))
+    if (!payload_is_valid(value))
     {
         /* Codes_SRS_AMQPVALUE_01_129: [If value.data is NULL and value.length is positive then amqpvalue_create_binary shall return NULL.] */
         LogError("NULL bytes with non-zero length");
@@ -991,38 +991,13 @@ AMQP_VALUE amqpvalue_create_binary(amqp_binary value)
         {
             /* Codes_SRS_AMQPVALUE_01_127: [amqpvalue_create_binary shall return a handle to an AMQP_VALUE that stores a sequence of bytes.] */
             result->type = AMQP_TYPE_BINARY;
-            if (value.length > 0)
-            {
-                result->value.binary_value.bytes = malloc(value.length);
-            }
-            else
-            {
-                result->value.binary_value.bytes = NULL;
-            }
-
-            result->value.binary_value.length = value.length;
-
-            if ((result->value.binary_value.bytes == NULL) && (value.length > 0))
-            {
-                /* Codes_SRS_AMQPVALUE_01_128: [If allocating the AMQP_VALUE fails then amqpvalue_create_binary shall return NULL.] */
-                LogError("Could not allocate memory for binary payload of AMQP value");
-                REFCOUNT_TYPE_DESTROY(AMQP_VALUE_DATA, result);
-                result = NULL;
-            }
-            else
-            {
-                if (value.length > 0)
-                {
-                    (void)memcpy((void*)result->value.binary_value.bytes, value.bytes, value.length);
-                }
-            }
+            result->value.binary_value = payload_clone(value);
         }
     }
-
     return result;
 }
 
-int amqpvalue_get_binary(AMQP_VALUE value, amqp_binary* binary_value)
+int amqpvalue_get_binary(AMQP_VALUE value, amqp_binary binary_value)
 {
     int result;
 
@@ -1046,9 +1021,8 @@ int amqpvalue_get_binary(AMQP_VALUE value, amqp_binary* binary_value)
         else
         {
             /* Codes_SRS_AMQPVALUE_01_131: [amqpvalue_get_binary shall yield a pointer to the sequence of bytes held by the AMQP_VALUE in binary_value.data and fill in the binary_value.length argument the number of bytes held in the binary value.] */
-            binary_value->length = value_data->value.binary_value.length;
-            binary_value->bytes = value_data->value.binary_value.bytes;
-
+            payload_append_payload_as_copy(binary_value, value_data->value.binary_value);
+            
             result = 0;
         }
     }
@@ -2115,8 +2089,7 @@ bool amqpvalue_are_equal(AMQP_VALUE value1, AMQP_VALUE value2)
 
             case AMQP_TYPE_BINARY:
                 /* Codes_SRS_AMQPVALUE_01_229: [- binary: compare all binary bytes.] */
-                result = (value1_data->value.binary_value.length == value2_data->value.binary_value.length) &&
-                    (memcmp(value1_data->value.binary_value.bytes, value2_data->value.binary_value.bytes, value1_data->value.binary_value.length) == 0);
+                result = payload_are_equal(value1_data->value.binary_value, value2_data->value.binary_value);
                 break;
 
             case AMQP_TYPE_STRING:
@@ -2239,43 +2212,53 @@ AMQP_TYPE amqpvalue_get_type(AMQP_VALUE value)
     return amqpvalue_data->type;
 }
 
-static int output_byte(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, unsigned char b)
+static int output_to_encoder_via_payload(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const void* bytes, size_t length)
 {
-    int result;
-
-    if (encoder_output != NULL)
-    {
-        /* Codes_SRS_AMQPVALUE_01_267: [amqpvalue_encode shall pass the encoded bytes to the encoder_output function.] */
-        /* Codes_SRS_AMQPVALUE_01_268: [On each call to the encoder_output function, amqpvalue_encode shall also pass the context argument.] */
-        result = encoder_output(context, &b, 1);
-    }
-    else
-    {
-        result = 0;
-    }
-
-    return result;
+   int result = 0;
+   PAYLOAD* payload = payload_create();
+   payload_append_data(payload, (const unsigned char*)bytes, length);
+   result = encoder_output(context, payload);
+   payload_destroy(&payload);
+   return result;
 }
 
-static int output_bytes(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const void* bytes, size_t length)
+static int output_byte(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, unsigned char b)
 {
-    int result;
+   int result;
 
-    if (encoder_output != NULL)
-    {
-        /* Codes_SRS_AMQPVALUE_01_267: [amqpvalue_encode shall pass the encoded bytes to the encoder_output function.] */
-        /* Codes_SRS_AMQPVALUE_01_268: [On each call to the encoder_output function, amqpvalue_encode shall also pass the context argument.] */
-        result = encoder_output(context, (const unsigned char*)bytes, length);
-    }
-    else
-    {
-        result = 0;
-    }
+   if (encoder_output != NULL)
+   {
+      /* Codes_SRS_AMQPVALUE_01_267: [amqpvalue_encode shall pass the encoded bytes to the encoder_output function.] */
+      /* Codes_SRS_AMQPVALUE_01_268: [On each call to the encoder_output function, amqpvalue_encode shall also pass the context argument.] */
+      result = output_to_encoder_via_payload(encoder_output, context, &b, 1);
+   }
+   else
+   {
+      result = 0;
+   }
 
-    return result;
+   return result;
 }
 
-static int encode_null_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int output_bytes(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const void* bytes, size_t length)
+{
+   int result;
+
+   if (encoder_output != NULL)
+   {
+      /* Codes_SRS_AMQPVALUE_01_267: [amqpvalue_encode shall pass the encoded bytes to the encoder_output function.] */
+      /* Codes_SRS_AMQPVALUE_01_268: [On each call to the encoder_output function, amqpvalue_encode shall also pass the context argument.] */
+      result = output_to_encoder_via_payload(encoder_output, context, bytes, length);
+   }
+   else
+   {
+      result = 0;
+   }
+
+   return result;
+}
+
+static int encode_null_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2295,7 +2278,7 @@ static int encode_null_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void
     return result;
 }
 
-static int encode_null_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_null_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result = 0;
     (void)encoder_output;
@@ -2305,7 +2288,7 @@ static int encode_null_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_null(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_null(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2325,7 +2308,7 @@ static int encode_null(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
     return result;
 }
 
-static int encode_boolean_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_boolean_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2345,7 +2328,7 @@ static int encode_boolean_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, v
     return result;
 }
 
-static int encode_boolean_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool value)
+static int encode_boolean_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool value)
 {
     int result;
 
@@ -2381,7 +2364,7 @@ static int encode_boolean_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* c
     return result;
 }
 
-static int encode_boolean(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool value)
+static int encode_boolean(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool value)
 {
     int result;
 
@@ -2417,7 +2400,7 @@ static int encode_boolean(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context
     return result;
 }
 
-static int encode_ubyte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_ubyte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2437,7 +2420,7 @@ static int encode_ubyte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, voi
     return result;
 }
 
-static int encode_ubyte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, unsigned char value)
+static int encode_ubyte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, unsigned char value)
 {
     int result;
 
@@ -2457,7 +2440,7 @@ static int encode_ubyte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* con
     return result;
 }
 
-static int encode_ubyte(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, unsigned char value)
+static int encode_ubyte(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, unsigned char value)
 {
     int result;
 
@@ -2477,7 +2460,7 @@ static int encode_ubyte(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, 
     return result;
 }
 
-static int encode_ushort_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_ushort_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2497,7 +2480,7 @@ static int encode_ushort_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, vo
     return result;
 }
 
-static int encode_ushort_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint16_t value)
+static int encode_ushort_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint16_t value)
 {
     int result;
 
@@ -2518,7 +2501,7 @@ static int encode_ushort_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
     return result;
 }
 
-static int encode_ushort(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint16_t value)
+static int encode_ushort(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint16_t value)
 {
     int result;
 
@@ -2538,7 +2521,7 @@ static int encode_ushort(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context,
     return result;
 }
 
-static int encode_uint_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_uint_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -2577,7 +2560,7 @@ static int encode_uint_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void
     return result;
 }
 
-static int encode_uint_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t value, bool use_smallest)
+static int encode_uint_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t value, bool use_smallest)
 {
     int result;
 
@@ -2619,7 +2602,7 @@ static int encode_uint_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_uint(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t value)
+static int encode_uint(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t value)
 {
     int result;
 
@@ -2659,7 +2642,7 @@ static int encode_uint(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, u
     return result;
 }
 
-static int encode_ulong_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_ulong_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -2698,7 +2681,7 @@ static int encode_ulong_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, voi
     return result;
 }
 
-static int encode_ulong_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint64_t value, bool use_smallest)
+static int encode_ulong_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint64_t value, bool use_smallest)
 {
     int result;
 
@@ -2744,7 +2727,7 @@ static int encode_ulong_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* con
     return result;
 }
 
-static int encode_ulong(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint64_t value)
+static int encode_ulong(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint64_t value)
 {
     int result;
     if (value == 0)
@@ -2784,7 +2767,7 @@ static int encode_ulong(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, 
     return result;
 }
 
-static int encode_byte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_byte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2804,7 +2787,7 @@ static int encode_byte_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void
     return result;
 }
 
-static int encode_byte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, char value)
+static int encode_byte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, char value)
 {
     int result;
 
@@ -2824,7 +2807,7 @@ static int encode_byte_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_byte(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, char value)
+static int encode_byte(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, char value)
 {
     int result;
 
@@ -2844,7 +2827,7 @@ static int encode_byte(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, c
     return result;
 }
 
-static int encode_short_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_short_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -2864,7 +2847,7 @@ static int encode_short_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, voi
     return result;
 }
 
-static int encode_short_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int16_t value)
+static int encode_short_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int16_t value)
 {
     int result;
 
@@ -2885,7 +2868,7 @@ static int encode_short_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* con
     return result;
 }
 
-static int encode_short(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int16_t value)
+static int encode_short(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int16_t value)
 {
     int result;
 
@@ -2905,7 +2888,7 @@ static int encode_short(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, 
     return result;
 }
 
-static int encode_int_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_int_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -2943,7 +2926,7 @@ static int encode_int_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void*
     return result;
 }
 
-static int encode_int_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int32_t value, bool use_smallest)
+static int encode_int_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int32_t value, bool use_smallest)
 {
     int result;
 
@@ -2984,7 +2967,7 @@ static int encode_int_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* conte
     return result;
 }
 
-static int encode_int(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int32_t value)
+static int encode_int(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int32_t value)
 {
     int result;
     bool use_smallest = ((value <= 127) && (value >= -128));
@@ -3005,7 +2988,7 @@ static int encode_int(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, in
     return result;
 }
 
-static int encode_long_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_long_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -3043,7 +3026,7 @@ static int encode_long_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void
     return result;
 }
 
-static int encode_long_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int64_t value, bool use_smallest)
+static int encode_long_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int64_t value, bool use_smallest)
 {
     int result;
 
@@ -3088,7 +3071,7 @@ static int encode_long_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_long(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int64_t value)
+static int encode_long(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int64_t value)
 {
     int result;
     bool use_smallest = ((value <= 127) && (value >= -128));
@@ -3109,7 +3092,7 @@ static int encode_long(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, i
     return result;
 }
 
-static int encode_float_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_float_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -3129,7 +3112,7 @@ static int encode_float_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, voi
     return result;
 }
 
-static int encode_float_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, float value)
+static int encode_float_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, float value)
 {
     int result;
 
@@ -3153,7 +3136,7 @@ static int encode_float_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* con
     return result;
 }
 
-static int encode_float(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, float value)
+static int encode_float(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, float value)
 {
     int result;
 
@@ -3173,7 +3156,7 @@ static int encode_float(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, 
     return result;
 }
 
-static int encode_double_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_double_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -3193,7 +3176,7 @@ static int encode_double_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, vo
     return result;
 }
 
-static int encode_double_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, double value)
+static int encode_double_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, double value)
 {
     int result;
 
@@ -3221,7 +3204,7 @@ static int encode_double_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
     return result;
 }
 
-static int encode_double(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, double value)
+static int encode_double(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, double value)
 {
     int result;
 
@@ -3241,7 +3224,7 @@ static int encode_double(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context,
     return result;
 }
 
-static int encode_timestamp_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_timestamp_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -3261,7 +3244,7 @@ static int encode_timestamp_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output,
     return result;
 }
 
-static int encode_timestamp_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int64_t value)
+static int encode_timestamp_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int64_t value)
 {
     int result;
 
@@ -3288,7 +3271,7 @@ static int encode_timestamp_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void*
     return result;
 }
 
-static int encode_timestamp(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, int64_t value)
+static int encode_timestamp(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, int64_t value)
 {
     int result;
 
@@ -3308,7 +3291,7 @@ static int encode_timestamp(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* conte
     return result;
 }
 
-static int encode_uuid_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_uuid_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -3328,7 +3311,7 @@ static int encode_uuid_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void
     return result;
 }
 
-static int encode_uuid_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uuid uuid)
+static int encode_uuid_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uuid uuid)
 {
     int result;
 
@@ -3348,7 +3331,7 @@ static int encode_uuid_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_uuid(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uuid uuid)
+static int encode_uuid(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uuid uuid)
 {
     int result;
 
@@ -3368,7 +3351,7 @@ static int encode_uuid(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, u
     return result;
 }
 
-static int encode_binary_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_binary_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
     if (use_smallest)
@@ -3405,14 +3388,15 @@ static int encode_binary_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, vo
     return result;
 }
 
-static int encode_binary_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const unsigned char* value, uint32_t length, bool use_smallest)
+static int encode_binary_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, PAYLOAD* payload, bool use_smallest)
 {
     int result;
+    size_t length = payload_get_length(payload);
     if (use_smallest)
     {
         /* Codes_SRS_AMQPVALUE_01_297: [<encoding name="vbin8" code="0xa0" category="variable" width="1" label="up to 2^8 - 1 octets of binary data"/>] */
         if ((output_byte(encoder_output, context, (unsigned char)length) != 0) ||
-            ((length > 0) && (output_bytes(encoder_output, context, value, length) != 0)))
+            ((length > 0) && (encoder_output(context, payload) != 0)))
         {
             /* Codes_SRS_AMQPVALUE_01_274: [When the encoder output function fails, amqpvalue_encode shall fail and return a non-zero value.] */
             LogError("Failed encoding small binary value");
@@ -3431,7 +3415,7 @@ static int encode_binary_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
             (output_byte(encoder_output, context, (length >> 16) & 0xFF) != 0) ||
             (output_byte(encoder_output, context, (length >> 8) & 0xFF) != 0) ||
             (output_byte(encoder_output, context, length & 0xFF) != 0) ||
-            (output_bytes(encoder_output, context, value, length) != 0))
+            (encoder_output(context, payload) != 0))
         {
             /* Codes_SRS_AMQPVALUE_01_274: [When the encoder output function fails, amqpvalue_encode shall fail and return a non-zero value.] */
             LogError("Failed encoding large binary value");
@@ -3447,13 +3431,14 @@ static int encode_binary_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
     return result;
 }
 
-static int encode_binary(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const unsigned char* value, uint32_t length)
+static int encode_binary(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, PAYLOAD* payload)
 {
     int result;
+    size_t length = payload_get_length(payload);
     bool use_smallest = (length <= 255);
 
     if ((encode_binary_constructor(encoder_output, context, use_smallest) != 0) ||
-        (encode_binary_value(encoder_output, context, value, length, use_smallest) != 0))
+        (encode_binary_value(encoder_output, context, payload, use_smallest) != 0))
     {
         /* Codes_SRS_AMQPVALUE_01_274: [When the encoder output function fails, amqpvalue_encode shall fail and return a non-zero value.] */
         LogError("Failed encoding binary");
@@ -3468,7 +3453,7 @@ static int encode_binary(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context,
     return result;
 }
 
-static int encode_string_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_string_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -3506,7 +3491,7 @@ static int encode_string_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, vo
     return result;
 }
 
-static int encode_string_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const char* value, size_t length, bool use_smallest)
+static int encode_string_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const char* value, size_t length, bool use_smallest)
 {
     int result;
 
@@ -3550,7 +3535,7 @@ static int encode_string_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
 
 }
 
-static int encode_string(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const char* value)
+static int encode_string(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const char* value)
 {
     int result;
     size_t length = strlen(value);
@@ -3572,7 +3557,7 @@ static int encode_string(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context,
     return result;
 }
 
-static int encode_symbol_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_symbol_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -3610,7 +3595,7 @@ static int encode_symbol_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, vo
     return result;
 }
 
-static int encode_symbol_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const char* value, size_t length, bool use_smallest)
+static int encode_symbol_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const char* value, size_t length, bool use_smallest)
 {
     int result;
 
@@ -3654,7 +3639,7 @@ static int encode_symbol_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* co
     return result;
 }
 
-static int encode_symbol(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, const char* value)
+static int encode_symbol(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, const char* value)
 {
     int result;
     size_t length = strlen(value);
@@ -3676,7 +3661,7 @@ static int encode_symbol(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context,
     return result;
 }
 
-static int encode_list_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_list_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -3760,7 +3745,7 @@ static int amqpvalue_get_encoded_list_size(AMQP_VALUE* items, uint32_t count, ui
     return result;
 }
 
-static int encode_list_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, uint32_t size, AMQP_VALUE* items, bool use_smallest)
+static int encode_list_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, uint32_t size, AMQP_VALUE* items, bool use_smallest)
 {
     int result;
     size_t i;
@@ -3831,7 +3816,7 @@ static int encode_list_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* cont
     return result;
 }
 
-static int encode_list(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, AMQP_VALUE* items)
+static int encode_list(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, AMQP_VALUE* items)
 {
     int result;
 
@@ -3899,7 +3884,7 @@ static int encode_list(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, u
     return result;
 }
 
-static int encode_map_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_map_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -3998,7 +3983,7 @@ static int amqpvalue_get_encoded_map_size(AMQP_MAP_KEY_VALUE_PAIR* pairs, uint32
     return result;
 }
 
-static int encode_map_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, uint32_t size, AMQP_MAP_KEY_VALUE_PAIR* pairs, bool use_smallest)
+static int encode_map_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, uint32_t size, AMQP_MAP_KEY_VALUE_PAIR* pairs, bool use_smallest)
 {
     int result;
     size_t i;
@@ -4075,7 +4060,7 @@ static int encode_map_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* conte
     return result;
 }
 
-static int encode_map(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, AMQP_MAP_KEY_VALUE_PAIR* pairs)
+static int encode_map(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, AMQP_MAP_KEY_VALUE_PAIR* pairs)
 {
     int result;
     uint32_t size;
@@ -4127,7 +4112,7 @@ static int encode_map(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, ui
     return result;
 }
 
-static int encode_array_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, bool use_smallest)
+static int encode_array_constructor(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, bool use_smallest)
 {
     int result;
 
@@ -4216,7 +4201,7 @@ static int amqpvalue_get_encoded_array_size(AMQP_VALUE* items, uint32_t count, u
     return result;
 }
 
-static int encode_array_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, uint32_t size, AMQP_VALUE* items, bool use_smallest)
+static int encode_array_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, uint32_t size, AMQP_VALUE* items, bool use_smallest)
 {
     int result;
     size_t i;
@@ -4291,7 +4276,7 @@ static int encode_array_value(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* con
     return result;
 }
 
-static int encode_array(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, uint32_t count, AMQP_VALUE* items)
+static int encode_array(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context, uint32_t count, AMQP_VALUE* items)
 {
     int result;
     uint32_t size;
@@ -4340,7 +4325,7 @@ static int encode_array(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context, 
     return result;
 }
 
-static int encode_descriptor_header(AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int encode_descriptor_header(AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -4358,7 +4343,7 @@ static int encode_descriptor_header(AMQPVALUE_ENCODER_OUTPUT encoder_output, voi
 }
 
 /* Codes_SRS_AMQPVALUE_01_265: [amqpvalue_encode shall encode the value per the ISO.] */
-int amqpvalue_encode(AMQP_VALUE value, AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+int amqpvalue_encode(AMQP_VALUE value, AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -4440,7 +4425,7 @@ int amqpvalue_encode(AMQP_VALUE value, AMQPVALUE_ENCODER_OUTPUT encoder_output, 
             break;
 
         case AMQP_TYPE_BINARY:
-            result = encode_binary(encoder_output, context, (const unsigned char*)value_data->value.binary_value.bytes, value_data->value.binary_value.length);
+            result = encode_binary(encoder_output, context, value_data->value.binary_value);
             break;
 
         case AMQP_TYPE_STRING:
@@ -4486,7 +4471,7 @@ int amqpvalue_encode(AMQP_VALUE value, AMQPVALUE_ENCODER_OUTPUT encoder_output, 
     return result;
 }
 
-static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context)
+static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context)
 {
     int result;
 
@@ -4639,7 +4624,7 @@ static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQP
                     result = MU_FAILURE;
                     break;
                 }
-                result = encode_binary_value(encoder_output, context, (const unsigned char*)value_data->value.binary_value.bytes, value_data->value.binary_value.length, false);
+                result = encode_binary_value(encoder_output, context, value_data->value.binary_value, false);
                 break;
 
             case AMQP_TYPE_STRING:
@@ -4721,13 +4706,10 @@ static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQP
     return result;
 }
 
-static int count_bytes(void* context, const unsigned char* bytes, size_t length)
+static int count_bytes(void* context, PAYLOAD* payload)
 {
-    size_t* byte_count;
-    (void)bytes;
-
-    byte_count = (size_t*)context;
-    *byte_count += length;
+    size_t* byte_count = (size_t*)context;
+    *byte_count += payload_get_length(payload);
 
     return 0;
 }
@@ -4748,7 +4730,7 @@ int amqpvalue_get_encoded_size(AMQP_VALUE value, size_t* encoded_size)
     else
     {
         *encoded_size = 0;
-        result = amqpvalue_encode(value, count_bytes, encoded_size);
+        result = amqpvalue_encode(value, count_bytes, (PAYLOAD*)encoded_size);
     }
 
     return result;
@@ -4767,7 +4749,7 @@ static int amqpvalue_get_encoded_array_item_size(AMQP_VALUE item, size_t* encode
     else
     {
         *encoded_size = 0;
-        result = amqpvalue_encode_array_item(item, false, count_bytes, encoded_size);
+        result = amqpvalue_encode_array_item(item, false, count_bytes, (PAYLOAD*)encoded_size);
     }
 
     return result;
@@ -4781,10 +4763,7 @@ static void amqpvalue_clear(AMQP_VALUE_DATA* value_data)
         break;
 
     case AMQP_TYPE_BINARY:
-        if (value_data->value.binary_value.bytes != NULL)
-        {
-            free((void*)value_data->value.binary_value.bytes);
-        }
+        payload_destroy(&value_data->value.binary_value);
         break;
     case AMQP_TYPE_STRING:
         if (value_data->value.string_value.chars != NULL)
@@ -5287,8 +5266,7 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                     /* Codes_SRS_AMQPVALUE_01_372: [1.6.19 binary A sequence of octets.] */
                     internal_decoder_data->decode_to_value->type = AMQP_TYPE_BINARY;
                     internal_decoder_data->decoder_state = DECODER_STATE_TYPE_DATA;
-                    internal_decoder_data->decode_to_value->value.binary_value.length = 0;
-                    internal_decoder_data->decode_to_value->value.binary_value.bytes = NULL;
+                    internal_decoder_data->decode_to_value->value.binary_value = NULL;
                     internal_decoder_data->bytes_decoded = 0;
 
                     /* Codes_SRS_AMQPVALUE_01_327: [If not enough bytes have accumulated to decode a value, the on_value_decoded shall not be called.] */
@@ -5828,15 +5806,14 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                 {
                     if (internal_decoder_data->bytes_decoded == 0)
                     {
-                        internal_decoder_data->decode_to_value->value.binary_value.length = buffer[0];
+                        internal_decoder_data->upcoming_binary_length = buffer[0];
+                        internal_decoder_data->decode_to_value->value.binary_value = payload_create();
                         internal_decoder_data->bytes_decoded++;
                         buffer++;
                         size--;
 
-                        if (internal_decoder_data->decode_to_value->value.binary_value.length == 0)
+                        if (internal_decoder_data->upcoming_binary_length == 0)
                         {
-                            internal_decoder_data->decode_to_value->value.binary_value.bytes = NULL;
-
                             /* Codes_SRS_AMQPVALUE_01_323: [When enough bytes have been processed for a valid amqp value, the on_value_decoded passed in amqpvalue_decoder_create shall be called.] */
                             /* Codes_SRS_AMQPVALUE_01_324: [The decoded amqp value shall be passed to on_value_decoded.] */
                             /* Codes_SRS_AMQPVALUE_01_325: [Also the context stored in amqpvalue_decoder_create shall be passed to the on_value_decoded callback.] */
@@ -5845,35 +5822,25 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                         }
                         else
                         {
-                            internal_decoder_data->decode_to_value->value.binary_value.bytes = (unsigned char*)malloc(internal_decoder_data->decode_to_value->value.binary_value.length);
-                            if (internal_decoder_data->decode_to_value->value.binary_value.bytes == NULL)
-                            {
-                                /* Codes_SRS_AMQPVALUE_01_326: [If any allocation failure occurs during decoding, amqpvalue_decode_bytes shall fail and return a non-zero value.] */
-                                LogError("Cannot allocate memory for decoded binary value");
-                                internal_decoder_data->decoder_state = DECODER_STATE_ERROR;
-                                result = MU_FAILURE;
-                            }
-                            else
-                            {
-                                result = 0;
-                            }
+                            payload_reserve_data(internal_decoder_data->decode_to_value->value.binary_value, internal_decoder_data->upcoming_binary_length);
+                            result = 0;
                         }
                     }
                     else
                     {
-                        size_t to_copy = internal_decoder_data->decode_to_value->value.binary_value.length - (internal_decoder_data->bytes_decoded - 1);
+                        size_t to_copy = internal_decoder_data->upcoming_binary_length - (internal_decoder_data->bytes_decoded - 1);
                         if (to_copy > size)
                         {
                             to_copy = size;
                         }
 
-                        (void)memcpy((unsigned char*)(internal_decoder_data->decode_to_value->value.binary_value.bytes) + (internal_decoder_data->bytes_decoded - 1), buffer, to_copy);
+                        payload_append_data(internal_decoder_data->decode_to_value->value.binary_value, buffer, to_copy);
 
                         buffer += to_copy;
                         size -= to_copy;
                         internal_decoder_data->bytes_decoded += to_copy;
 
-                        if (internal_decoder_data->bytes_decoded == internal_decoder_data->decode_to_value->value.binary_value.length + 1)
+                        if (internal_decoder_data->bytes_decoded == internal_decoder_data->upcoming_binary_length + 1)
                         {
                             internal_decoder_data->decoder_state = DECODER_STATE_CONSTRUCTOR;
 
@@ -5891,19 +5858,23 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                 /* Codes_SRS_AMQPVALUE_01_374: [<encoding name="vbin32" code="0xb0" category="variable" width="4" label="up to 2^32 - 1 octets of binary data"/>] */
                 case 0xB0:
                 {
+                    if (internal_decoder_data->bytes_decoded == 1)
+                    {
+                        internal_decoder_data->upcoming_binary_length = 0;
+                    }
+
                     if (internal_decoder_data->bytes_decoded < 4)
                     {
-                        internal_decoder_data->decode_to_value->value.binary_value.length += buffer[0] << ((3 - internal_decoder_data->bytes_decoded) * 8);
+                        internal_decoder_data->upcoming_binary_length += buffer[0] << ((3 - internal_decoder_data->bytes_decoded) * 8);
                         internal_decoder_data->bytes_decoded++;
                         buffer++;
                         size--;
 
                         if (internal_decoder_data->bytes_decoded == 4)
                         {
-                            if (internal_decoder_data->decode_to_value->value.binary_value.length == 0)
+                            internal_decoder_data->decode_to_value->value.binary_value = payload_create();
+                            if (internal_decoder_data->upcoming_binary_length == 0)
                             {
-                                internal_decoder_data->decode_to_value->value.binary_value.bytes = NULL;
-
                                 /* Codes_SRS_AMQPVALUE_01_323: [When enough bytes have been processed for a valid amqp value, the on_value_decoded passed in amqpvalue_decoder_create shall be called.] */
                                 /* Codes_SRS_AMQPVALUE_01_324: [The decoded amqp value shall be passed to on_value_decoded.] */
                                 /* Codes_SRS_AMQPVALUE_01_325: [Also the context stored in amqpvalue_decoder_create shall be passed to the on_value_decoded callback.] */
@@ -5912,18 +5883,8 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                             }
                             else
                             {
-                                internal_decoder_data->decode_to_value->value.binary_value.bytes = (unsigned char*)malloc((size_t)internal_decoder_data->decode_to_value->value.binary_value.length + 1);
-                                if (internal_decoder_data->decode_to_value->value.binary_value.bytes == NULL)
-                                {
-                                    /* Codes_SRS_AMQPVALUE_01_326: [If any allocation failure occurs during decoding, amqpvalue_decode_bytes shall fail and return a non-zero value.] */
-                                    internal_decoder_data->decoder_state = DECODER_STATE_ERROR;
-                                    LogError("Cannot allocate memory for decoded binary value");
-                                    result = MU_FAILURE;
-                                }
-                                else
-                                {
-                                    result = 0;
-                                }
+                                payload_reserve_data(internal_decoder_data->decode_to_value->value.binary_value, internal_decoder_data->upcoming_binary_length + 1);
+                                result = 0;
                             }
                         }
                         else
@@ -5933,18 +5894,18 @@ static int internal_decoder_decode_bytes(INTERNAL_DECODER_DATA* internal_decoder
                     }
                     else
                     {
-                        size_t to_copy = internal_decoder_data->decode_to_value->value.binary_value.length - (internal_decoder_data->bytes_decoded - 4);
+                        size_t to_copy = internal_decoder_data->upcoming_binary_length - (internal_decoder_data->bytes_decoded - 4);
                         if (to_copy > size)
                         {
                             to_copy = size;
                         }
 
-                        (void)memcpy((unsigned char*)(internal_decoder_data->decode_to_value->value.binary_value.bytes) + (internal_decoder_data->bytes_decoded - 4), buffer, to_copy);
+                        payload_append_data(internal_decoder_data->decode_to_value->value.binary_value, buffer, to_copy);
                         buffer += to_copy;
                         size -= to_copy;
                         internal_decoder_data->bytes_decoded += to_copy;
 
-                        if (internal_decoder_data->bytes_decoded == internal_decoder_data->decode_to_value->value.binary_value.length + 4)
+                        if (internal_decoder_data->bytes_decoded == internal_decoder_data->upcoming_binary_length + 4)
                         {
                             internal_decoder_data->decoder_state = DECODER_STATE_CONSTRUCTOR;
                             internal_decoder_data->on_value_decoded(internal_decoder_data->on_value_decoded_context, internal_decoder_data->decode_to_value);

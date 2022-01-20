@@ -36,7 +36,7 @@ void saslmssbcbs_destroy(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_
     }
 }
 
-int saslmssbcbs_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES* init_bytes)
+int saslmssbcbs_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES init_bytes)
 {
     int result;
 
@@ -46,9 +46,7 @@ int saslmssbcbs_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_con
     }
     else
     {
-        init_bytes->bytes = NULL;
-        init_bytes->length = 0;
-
+        payload_clear(init_bytes);
         result = 0;
     }
 
@@ -71,7 +69,7 @@ const char* saslmssbcbs_get_mechanism_name(CONCRETE_SASL_MECHANISM_HANDLE sasl_m
     return result;
 }
 
-int saslmssbcbs_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES* challenge_bytes, SASL_MECHANISM_BYTES* response_bytes)
+int saslmssbcbs_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES challenge_bytes, SASL_MECHANISM_BYTES response_bytes)
 {
     (void)concrete_sasl_mechanism;
     (void)challenge_bytes;

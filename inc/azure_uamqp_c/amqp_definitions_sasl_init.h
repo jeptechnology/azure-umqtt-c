@@ -32,7 +32,7 @@ extern "C" {
 
     MOCKABLE_FUNCTION(, int, sasl_init_get_mechanism, SASL_INIT_HANDLE, sasl_init, const char**, mechanism_value);
     MOCKABLE_FUNCTION(, int, sasl_init_set_mechanism, SASL_INIT_HANDLE, sasl_init, const char*, mechanism_value);
-    MOCKABLE_FUNCTION(, int, sasl_init_get_initial_response, SASL_INIT_HANDLE, sasl_init, amqp_binary*, initial_response_value);
+    MOCKABLE_FUNCTION(, int, sasl_init_get_initial_response, SASL_INIT_HANDLE, sasl_init, amqp_binary, initial_response_value);
     MOCKABLE_FUNCTION(, int, sasl_init_set_initial_response, SASL_INIT_HANDLE, sasl_init, amqp_binary, initial_response_value);
     MOCKABLE_FUNCTION(, int, sasl_init_get_hostname, SASL_INIT_HANDLE, sasl_init, const char**, hostname_value);
     MOCKABLE_FUNCTION(, int, sasl_init_set_hostname, SASL_INIT_HANDLE, sasl_init, const char*, hostname_value);

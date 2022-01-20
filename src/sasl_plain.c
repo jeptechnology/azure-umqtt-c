@@ -122,7 +122,7 @@ void saslplain_destroy(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_ha
     }
 }
 
-int saslplain_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES* init_bytes)
+int saslplain_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concrete_handle, SASL_MECHANISM_BYTES init_bytes)
 {
     int result;
 
@@ -139,8 +139,7 @@ int saslplain_get_init_bytes(CONCRETE_SASL_MECHANISM_HANDLE sasl_mechanism_concr
         SASL_PLAIN_INSTANCE* sasl_plain_instance = (SASL_PLAIN_INSTANCE*)sasl_mechanism_concrete_handle;
 
         /* Codes_SRS_SASL_PLAIN_01_007: [`saslplain_get_init_bytes` shall construct the initial bytes per the RFC 4616.] */
-        init_bytes->bytes = sasl_plain_instance->init_bytes;
-        init_bytes->length = sasl_plain_instance->init_bytes_length;
+        payload_append_data(init_bytes, sasl_plain_instance->init_bytes, sasl_plain_instance->init_bytes_length);
 
         /* Codes_SRS_SASL_PLAIN_01_008: [On success `saslplain_get_init_bytes` shall return zero.] */
         result = 0;
@@ -168,7 +167,7 @@ const char* saslplain_get_mechanism_name(CONCRETE_SASL_MECHANISM_HANDLE sasl_mec
     return result;
 }
 
-int saslplain_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES* challenge_bytes, SASL_MECHANISM_BYTES* response_bytes)
+int saslplain_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, const SASL_MECHANISM_BYTES challenge_bytes, SASL_MECHANISM_BYTES response_bytes)
 {
     int result;
 
@@ -185,8 +184,7 @@ int saslplain_challenge(CONCRETE_SASL_MECHANISM_HANDLE concrete_sasl_mechanism, 
     else
     {
         /* Codes_SRS_SASL_PLAIN_01_012: [`saslplain_challenge` shall set the `response_bytes` buffer to NULL and 0 size as the PLAIN SASL mechanism does not implement challenge/response.] */
-        response_bytes->bytes = NULL;
-        response_bytes->length = 0;
+        payload_clear(response_bytes);
 
         /* Codes_SRS_SASL_PLAIN_01_013: [On success, `saslplain_challenge` shall return 0.] */
         result = 0;

@@ -13,7 +13,7 @@
 #include "azure_uamqp_c/amqp_definitions_milliseconds.h"
 #include "azure_uamqp_c/amqp_definitions_header.h"
 #include "azure_uamqp_c/amqp_definitions_delivery_annotations.h"
-
+#include "azure_uamqp_c/payload.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,11 +35,7 @@ extern "C" {
     MU_DEFINE_ENUM(MESSAGE_BODY_TYPE, MESSAGE_BODY_TYPE_VALUES)
 
     typedef struct MESSAGE_INSTANCE_TAG* MESSAGE_HANDLE;
-    typedef struct BINARY_DATA_TAG
-    {
-        const unsigned char* bytes;
-        size_t length;
-    } BINARY_DATA;
+    typedef PAYLOAD* BINARY_DATA;
 
     MOCKABLE_FUNCTION(, MESSAGE_HANDLE, message_create);
     MOCKABLE_FUNCTION(, MESSAGE_HANDLE, message_clone, MESSAGE_HANDLE, source_message);
@@ -57,7 +53,7 @@ extern "C" {
     MOCKABLE_FUNCTION(, int, message_set_footer, MESSAGE_HANDLE, message, annotations, footer);
     MOCKABLE_FUNCTION(, int, message_get_footer, MESSAGE_HANDLE, message, annotations*, footer);
     MOCKABLE_FUNCTION(, int, message_add_body_amqp_data, MESSAGE_HANDLE, message, BINARY_DATA, amqp_data);
-    MOCKABLE_FUNCTION(, int, message_get_body_amqp_data_in_place, MESSAGE_HANDLE, message, size_t, index, BINARY_DATA*, amqp_data);
+    MOCKABLE_FUNCTION(, BINARY_DATA, message_get_body_amqp_data_in_place, MESSAGE_HANDLE, message, size_t, index);
     MOCKABLE_FUNCTION(, int, message_get_body_amqp_data_count, MESSAGE_HANDLE, message, size_t*, count);
     MOCKABLE_FUNCTION(, int, message_set_body_amqp_value, MESSAGE_HANDLE, message, AMQP_VALUE, body_amqp_value);
     MOCKABLE_FUNCTION(, int, message_get_body_amqp_value_in_place, MESSAGE_HANDLE, message, AMQP_VALUE*, body_amqp_value);
