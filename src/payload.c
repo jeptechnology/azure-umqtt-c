@@ -16,6 +16,7 @@
 #endif
 
 static const size_t UNCALCULATED_SIZE = 0xFFFFFFFF;
+int32_t payloadCount = 0;
 
 static bool count_bytes(void *context, const unsigned char *buffer, size_t length)
 {
@@ -133,6 +134,7 @@ PAYLOAD *payload_create()
    PAYLOAD* new_payload = (PAYLOAD*)calloc(sizeof(PAYLOAD), 1);
    if (new_payload)
    {
+      ++payloadCount;
       new_payload->type = PAYLOAD_TYPE_BYTE_ARRAY;
       new_payload->x.byte_array.bytes = NULL;
       new_payload->x.byte_array.capacity = 0;
@@ -198,6 +200,9 @@ void payload_destroy(PAYLOAD **payload_to_destroy)
             payload->x.byte_array.bytes = NULL;
          }
          free(payload);
+         
+         --payloadCount;
+
          payload = next;
       }
 

@@ -546,7 +546,6 @@ static SEND_ONE_MESSAGE_RESULT send_one_message(MESSAGE_SENDER_INSTANCE* message
                                     amqpvalue_destroy(body_amqp_data);
                                 }
                             }
-                            payload_destroy(&binary_data);
                         }
                         break;
                     }

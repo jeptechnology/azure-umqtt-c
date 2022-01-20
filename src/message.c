@@ -1046,7 +1046,7 @@ BINARY_DATA message_get_body_amqp_data_in_place(MESSAGE_HANDLE message, size_t i
         else
         {
             /* Codes_SRS_MESSAGE_01_092: [ `message_get_body_amqp_data_in_place` shall place the contents of the `index`th AMQP data for the message instance identified by `message` into the argument `amqp_data`, without copying the binary payload memory. ]*/
-            result = payload_clone(message->body_amqp_data_items[index]);
+            result = message->body_amqp_data_items[index];
         }
     }
 
