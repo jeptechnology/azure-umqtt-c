@@ -1,6 +1,6 @@
 [submodule "deps/azure-c-shared-utility"]
 	path = deps/azure-c-shared-utility
-	url = https://github.com/Azure/azure-c-shared-utility
+	url = https://github.com/jeptechnology/azure-c-shared-utility
 [submodule "deps/azure-ctest"]
 	path = deps/azure-ctest
 	url = https://github.com/Azure/azure-ctest

@@ -201,7 +201,7 @@ typedef struct AMQPVALUE_DECODER_HANDLE_DATA_TAG
     AMQP_VALUE_DATA* decode_to_value;
 } AMQPVALUE_DECODER_HANDLE_DATA;
 
-static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQPVALUE_ENCODER_OUTPUT encoder_output, void* context);
+static int amqpvalue_encode_array_item(AMQP_VALUE item, bool first_element, AMQPVALUE_ENCODER_OUTPUT encoder_output, PAYLOAD* context);
 static int amqpvalue_get_encoded_array_item_size(AMQP_VALUE item, size_t* encoded_size);
 
 /* Codes_SRS_AMQPVALUE_01_003: [1.6.1 null Indicates an empty value.] */

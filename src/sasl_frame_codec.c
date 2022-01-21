@@ -142,7 +142,7 @@ static void frame_received(void* context, const unsigned char* type_specific, ui
     }
 }
 
-static int encode_bytes(void* context, const PAYLOAD* bytes)
+static int encode_bytes(void* context, PAYLOAD* bytes)
 {
    PAYLOAD* payload = (PAYLOAD*)context;
    payload_append_payload_as_copy(payload, bytes);

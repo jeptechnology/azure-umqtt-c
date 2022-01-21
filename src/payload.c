@@ -15,6 +15,8 @@
 #define FATAL(...) exit(-1)
 #endif
 
+#define min(a,b) ((a) < (b) ? (a) : (b))
+
 static const size_t UNCALCULATED_SIZE = 0xFFFFFFFF;
 int32_t payloadCount = 0;
 
