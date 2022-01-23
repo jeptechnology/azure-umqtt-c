@@ -86,7 +86,7 @@ static void payload_copy_bytes(PAYLOAD *payload, const unsigned char *buffer, si
 {
    payload->type = PAYLOAD_TYPE_BYTE_ARRAY;
    payload->x.byte_array.bytes = (unsigned char *)calloc(length, 1);
-   if (payload->x.byte_array.bytes > 0)
+   if (payload->x.byte_array.bytes != 0)
    {
       memcpy((void*)payload->x.byte_array.bytes, (void*)buffer, (uint32_t)length);
       payload->x.byte_array.capacity = (uint32_t)length;

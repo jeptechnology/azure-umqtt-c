@@ -298,7 +298,7 @@ char* amqpvalue_to_string(AMQP_VALUE amqp_value)
             else
             {
                 char str_value[25];
-                if ((snprintf(str_value, sizeof(str_value), "U%02X%02X%02X%02X", char_code >> 24, (char_code >> 16) & 0xFF, (char_code >> 8) & 0xFF, char_code & 0xFF) < 0) ||
+               if ((snprintf(str_value, sizeof(str_value), "U%02" PRIx32 "%02" PRIx32 "%02" PRIx32 "%02" PRIx32, char_code >> 24, (char_code >> 16) & 0xFF, (char_code >> 8) & 0xFF, char_code & 0xFF) < 0) ||
                     (string_concat(&result, str_value) != 0))
                 {
                     LogError("Failure building amqp value string");
